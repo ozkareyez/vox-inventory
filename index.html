@@ -39,6 +39,8 @@ h1{font-family:'Charter','Georgia',serif;font-weight:600;font-size:1.5rem;letter
 .row{display:flex;gap:10px;align-items:center;}
 .search-box{flex:1;padding:12px 14px;font-size:1rem;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);font-family:-apple-system,sans-serif;}
 .search-box:focus{outline:2px solid var(--accent);outline-offset:1px;}
+.um-select{padding:10px 12px;font-size:.9rem;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);font-family:-apple-system,sans-serif;cursor:pointer;max-width:100%;}
+.um-select:focus{outline:2px solid var(--accent);outline-offset:1px;}
 button{font-family:-apple-system,sans-serif;cursor:pointer;border:none;}
 #mic{width:52px;height:52px;min-width:52px;border-radius:50%;background:var(--mic-idle);color:#fff;font-size:1.3rem;display:flex;align-items:center;justify-content:center;transition:background .15s,transform .15s;}
 #mic:active{transform:scale(.94);}
@@ -100,6 +102,10 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;}
       <button id="mic" title="Buscar por voz" aria-label="Buscar por voz">🎤</button>
     </div>
     <div id="status" aria-live="polite"></div>
+    <div class="row" style="margin-top:12px;gap:10px;flex-wrap:wrap;">
+      <select id="umFilter" class="um-select" aria-label="Filtrar por unidad de medida" title="Filtrar por unidad de medida"></select>
+      <span class="count" id="umHint" aria-live="polite"></span>
+    </div>
     <div class="row" id="uploadPanel" style="margin-top:12px;justify-content:space-between;flex-wrap:wrap;gap:10px;">
       <label class="upload">Cargar tu Excel (o arrástralo aquí): <input type="file" id="fileInput" accept=".xlsx,.xls,.csv"></label>
       <span class="count-row"><span class="count" id="dataCount"></span><button class="reset-samp" id="resetSample" title="Restaurar datos de ejemplo" hidden>↺</button></span>
@@ -180,6 +186,23 @@ const COLS = ["Referencia","Descripcion","Bodega","Peso","UM","Existencia","Tran
 const CART_KEY='vox_inventory_cart_v1';
 const PROD_KEY='vox_inventory_products_v1';
 
+const UM_BASE=[
+  {code:'UND',words:['unidad','unidades','und','unu']},
+  {code:'BOL',words:['bolsa','bolsas','bol','bolso','bolsitas']},
+  {code:'CJA',words:['caja','cajas','pack x cajas']},
+  {code:'PAC',words:['paquete','paquetes','pack','packs','bulto','bultos']},
+  {code:'LAT',words:['lata','latas']},
+  {code:'GAL',words:['galón','galon','galones']},
+  {code:'TAR',words:['tarro','tarros']},
+  {code:'SOB',words:['sobre','sobres']},
+  {code:'TUB',words:['tubo','tubos']},
+  {code:'ROL',words:['rollo','rollos']},
+  {code:'POT',words:['pote','potes','potecito']},
+  {code:'FRA',words:['frasco','frascos']},
+  {code:'VEN',words:['venta','envase','envases']},
+  {code:'KIL',words:['kilo','kilos','kilogramo','kg']}
+];
+
 let PRODUCTS = RAW_SAMPLE.map(r=>Object.fromEntries(COLS.map((c,i)=>[c,r[i]])));
 let fuse = buildFuse(PRODUCTS);
 let cart = [];
@@ -191,6 +214,7 @@ function buildFuse(list){
 }
 
 function escapeHtml(s){return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function escapeReg(s){return String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
 function fmtQty(v){return (v===''||v===null||v===undefined) ? '—' : v;}
 function nowStamp(){
   const n=new Date();
@@ -199,6 +223,40 @@ function nowStamp(){
     Fecha: n.toLocaleDateString('es-CO'),
     Hora: n.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'})
   };
+}
+
+function cleanProducts(list){
+  return (list||[]).filter(r=>{
+    const ref=String(r.Referencia||'').trim();
+    const desc=String(r.Descripcion||'').trim();
+    return ref && desc && !/^gran\s*total/i.test(ref) && !/^e/i.test(ref);
+  });
+}
+
+let WORD_TO_UM={};
+function buildUmLexicon(){
+  WORD_TO_UM={};
+  const seen=new Set();
+  PRODUCTS.forEach(p=>{
+    const v=String(p.UM||'').trim();
+    if(!v||seen.has(v.toUpperCase()))return;
+    seen.add(v.toUpperCase());
+    const key=v.toUpperCase();
+    let aliases=null;
+    for(const b of UM_BASE){
+      if(b.code===key||(key.length>=2&&(b.code.startsWith(key)||key.startsWith(b.code)))){aliases=b.words;break;}
+    }
+    if(aliases)aliases.forEach(w=>{const n=w.trim().toLowerCase();if(n)WORD_TO_UM[n]=v;});
+    WORD_TO_UM[key.toLowerCase()]=v;
+  });
+}
+function detectUmInText(text){
+  const wrapped=' '+text.toLowerCase().trim()+' ';
+  const words=Object.keys(WORD_TO_UM).sort((a,b)=>b.length-a.length);
+  for(const w of words){
+    if(wrapped.includes(' '+w+' '))return {um:WORD_TO_UM[w],word:w};
+  }
+  return null;
 }
 
 // ---------- Persistencia local ----------
@@ -218,12 +276,40 @@ const statusEl=document.getElementById('status');
 const dataCountEl=document.getElementById('dataCount');
 const resetSampleBtn=document.getElementById('resetSample');
 const hintEl=document.getElementById('hintEl');
+const umFilter=document.getElementById('umFilter');
+const umHint=document.getElementById('umHint');
 
+function filteredCount(){
+  const um=umFilter.value;
+  return um?PRODUCTS.filter(p=>String(p.UM)===um).length:PRODUCTS.length;
+}
+function populateUm(){
+  const counts=new Map();
+  PRODUCTS.forEach(p=>{const v=String(p.UM||'').trim();if(v)counts.set(v,(counts.get(v)||0)+1);});
+  const vals=[...counts.keys()].sort();
+  const prev=umFilter.value;
+  umFilter.innerHTML='<option value="">Todas las UM</option>'+
+    vals.map(v=>'<option value="'+escapeHtml(v)+'">'+escapeHtml(v+' ('+counts.get(v)+')')+'</option>').join('');
+  if(prev&&vals.includes(prev))umFilter.value=prev;else umFilter.value='';
+}
+function applyUmFilter(){
+  const um=umFilter.value;
+  fuse=buildFuse(um?PRODUCTS.filter(p=>String(p.UM)===um):PRODUCTS);
+  umHint.textContent=um?('Filtrando solo en '+um+' — '+filteredCount()+' productos'):'';
+}
 function updateCount(){
-  dataCountEl.textContent=PRODUCTS.length+' productos'+(customLoaded?' (archivo)':'');
+  const um=umFilter.value;
+  dataCountEl.textContent=filteredCount()+' productos'+(customLoaded?' (archivo)':'')+(um?' · UM: '+um:'');
   resetSampleBtn.hidden=!customLoaded;
 }
 function setStatus(msg){statusEl.textContent=msg;}
+
+umFilter.addEventListener('change',()=>{
+  applyUmFilter();
+  updateCount();
+  searchInput.focus();
+  doSearch(searchInput.value);
+});
 
 // Toast
 const toastEl=document.getElementById('toast');
@@ -462,8 +548,18 @@ if(SR){
   rec.onend=()=>{listening=false;micBtn.classList.remove('listening');};
   rec.onerror=(e)=>{setStatus('No se pudo captar el audio ('+e.error+'). Intenta de nuevo.');};
   rec.onresult=(e)=>{
-    const text=e.results[0][0].transcript;
-    setStatus('Escuché: "'+text+'"');
+    const raw=e.results[0][0].transcript;
+    let text=raw;
+    const det=detectUmInText(text);
+    if(det){
+      umFilter.value=det.um;
+      applyUmFilter();
+      updateCount();
+      text=raw.replace(new RegExp('\\s*'+escapeReg(det.word)+'\\s*','i'),' ').trim();
+      setStatus('Filtrando por '+det.um+'. Buscando: "'+text+'"');
+    }else{
+      setStatus('Escuché: "'+text+'"');
+    }
     searchInput.value=text;
     doSearch(text);
   };
@@ -509,13 +605,18 @@ function readFile(file){
           Comprometida:g('Comprometida')
         };
       }).filter(r=>r.Referencia&&r.Descripcion&&!/^\s*gran\s*total/i.test(String(r.Referencia)));
-      if(!mapped.length){setStatus('No se encontraron filas válidas en el archivo.');return;}
-      PRODUCTS=mapped;
-      fuse=buildFuse(PRODUCTS);
+      const cleaned=cleanProducts(mapped);
+      const excluded=mapped.length-cleaned.length;
+      if(!cleaned.length){setStatus('No se encontraron filas válidas en el archivo.');return;}
+      PRODUCTS=cleaned;
       customLoaded=true;
       saveJSON(PROD_KEY,PRODUCTS);
+      populateUm();
+      buildUmLexicon();
+      applyUmFilter();
       updateCount();
       let msg='Archivo cargado: '+PRODUCTS.length+' productos.';
+      if(excluded>0)msg+=' Se excluyeron '+excluded+' referencias (empiezan con E).';
       if(missing.length)msg+=' Columnas no reconocidas: '+missing.join(', ')+'.';
       setStatus(msg);
       resultsEl.innerHTML='';
@@ -553,13 +654,13 @@ resetSampleBtn.addEventListener('click',()=>{
   if(confirm('¿Restaurar datos de ejemplo? Se quitará el archivo cargado.')){
     try{localStorage.removeItem(PROD_KEY);}catch(e){}
     customLoaded=false;
-    PRODUCTS=RAW_SAMPLE.map(r=>Object.fromEntries(COLS.map((c,i)=>[c,r[i]])));
-    fuse=buildFuse(PRODUCTS);
+    PRODUCTS=cleanProducts(RAW_SAMPLE.map(r=>Object.fromEntries(COLS.map((c,i)=>[c,r[i]]))));
+    populateUm();
+    buildUmLexicon();
+    applyUmFilter();
     updateCount();
     searchInput.value='';
-    resultsEl.innerHTML='';
-    cardProducts=[];
-    showHint('Escribe o habla para buscar un producto.');
+    doSearch('');
     setStatus('Datos de ejemplo restaurados.');
   }
 });
@@ -614,12 +715,14 @@ if('serviceWorker' in navigator && location.protocol.startsWith('http')){
 // ---------- Inicialización ----------
 (function init(){
   const pers=loadJSON(PROD_KEY);
-  if(Array.isArray(pers)&&pers.length){
-    PRODUCTS=pers;
-    fuse=buildFuse(PRODUCTS);
+  if(Array.isArray(pers)&&cleanProducts(pers).length){
+    PRODUCTS=cleanProducts(pers);
     customLoaded=true;
   }
   cart=loadCart();
+  populateUm();
+  buildUmLexicon();
+  applyUmFilter();
   updateCount();
   renderCart();
   if(customLoaded)setStatus('Datos restaurados del archivo cargado antes de recargar.');
