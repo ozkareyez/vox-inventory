@@ -81,6 +81,8 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;}
 .count-row{display:flex;align-items:center;gap:8px;}
 .btn-ghost{background:none;color:var(--ink-soft);font-size:.78rem;text-decoration:underline;padding:2px 4px;}
 .btn-ghost:hover{color:var(--accent);}
+.day-reset{background:var(--panel);color:var(--accent);border:1.5px solid var(--accent);padding:10px 16px;border-radius:8px;font-size:.9rem;font-weight:600;white-space:nowrap;}
+.day-reset:hover{background:var(--accent-soft);}
 .reset-samp{background:none;color:var(--ink-soft);font-size:.9rem;padding:0 6px;}
 .reset-samp:hover{color:var(--accent);}
 .hint{color:var(--ink-soft);font-family:-apple-system,sans-serif;font-size:.85rem;padding:8px 2px;}
@@ -94,8 +96,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;}
 <body>
 <div class="wrap">
   <h1>Buscador por voz</h1>
-  <p class="sub">Di la descripción del producto para encontrarlo rápido. Cada conteo queda registrado con fecha y hora — puedes contar la misma referencia en varias posiciones y luego ver el total.</p>
-
+ 
   <div class="panel">
     <div class="row">
       <input id="searchInput" class="search-box" placeholder="Ej: adulto de 25, o escribe aquí…" autocomplete="off" aria-label="Buscar producto">
@@ -134,6 +135,16 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;}
       <span class="count" id="totalsCount"></span>
     </div>
     <div id="totalsTableWrap" style="margin-top:10px;overflow-x:auto;"></div>
+  </div>
+
+  <div class="panel" id="dayResetPanel" style="margin-top:16px;">
+    <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <div>
+        <strong style="font-family:-apple-system,sans-serif;font-size:.95rem;">Comenzar día nuevo</strong>
+        <p class="sticky-hint" style="margin:4px 0 0;">Borra todos los conteos y el archivo cargado, para subir el Excel de hoy.</p>
+      </div>
+      <button class="day-reset" id="resetDayBtn">Reiniciar día</button>
+    </div>
   </div>
 
   <div class="panel" id="installPanel" style="margin-top:16px;text-align:center;" hidden>
@@ -529,6 +540,34 @@ document.getElementById('clearAllBtn').addEventListener('click',()=>{
     cart=[];removedStack=[];saveCart();renderCart();
     showToast('Conteos borrados.');
   }
+});
+document.getElementById('resetDayBtn').addEventListener('click',()=>{
+  if(cart.length===0&&customLoaded===false){
+    showToast('Todo ya está vacío.');
+    return;
+  }
+  if(!confirm('¿Iniciar un día nuevo?\n\nSe borrarán TODOS los conteos y el archivo cargado. El catálogo quedará vacío hasta que subas el Excel de hoy.'))return;
+  cart=[];removedStack=[];
+  saveCart();
+  try{localStorage.removeItem(PROD_KEY);}catch(e){}
+  customLoaded=false;
+  PRODUCTS=[];
+  populateUm();
+  buildUmLexicon();
+  applyUmFilter();
+  updateCount();
+  selected=null;
+  document.getElementById('qtyPanelWrap').innerHTML='';
+  searchInput.value='';
+  resultsEl.innerHTML='';
+  cardProducts=[];
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.update())).catch(()=>{});
+  }
+  showHint('Sube el Excel de hoy para comenzar el conteo.');
+  setStatus('Día reiniciado. Sube el archivo de hoy.');
+  renderCart();
+  showToast('Día reiniciado.');
 });
 
 // ---------- Reconocimiento de voz ----------
