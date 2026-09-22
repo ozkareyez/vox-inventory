@@ -196,6 +196,8 @@ const FIELDS = {
 const COLS = ["Referencia","Descripcion","Bodega","Peso","UM","Existencia","Transito","Disponible","Comprometida"];
 const CART_KEY='vox_inventory_cart_v1';
 const PROD_KEY='vox_inventory_products_v1';
+const APPV_KEY='vox_inventory_appversion';
+const APP_VERSION='v3';
 
 const UM_BASE=[
   {code:'UND',words:['unidad','unidades','und','unu']},
@@ -214,7 +216,7 @@ const UM_BASE=[
   {code:'KIL',words:['kilo','kilos','kilogramo','kg']}
 ];
 
-let PRODUCTS = RAW_SAMPLE.map(r=>Object.fromEntries(COLS.map((c,i)=>[c,r[i]])));
+let PRODUCTS = [];
 let fuse = buildFuse(PRODUCTS);
 let cart = [];
 let selected = null;
@@ -311,7 +313,7 @@ function applyUmFilter(){
 function updateCount(){
   const um=umFilter.value;
   dataCountEl.textContent=filteredCount()+' productos'+(customLoaded?' (archivo)':'')+(um?' · UM: '+um:'');
-  resetSampleBtn.hidden=!customLoaded;
+  resetSampleBtn.hidden=!(customLoaded||PRODUCTS.length===0);
 }
 function setStatus(msg){statusEl.textContent=msg;}
 
@@ -552,6 +554,7 @@ document.getElementById('resetDayBtn').addEventListener('click',()=>{
   try{localStorage.removeItem(PROD_KEY);}catch(e){}
   customLoaded=false;
   PRODUCTS=[];
+  saveJSON(APPV_KEY,APP_VERSION);
   populateUm();
   buildUmLexicon();
   applyUmFilter();
@@ -650,6 +653,7 @@ function readFile(file){
       PRODUCTS=cleaned;
       customLoaded=true;
       saveJSON(PROD_KEY,PRODUCTS);
+      saveJSON(APPV_KEY,APP_VERSION);
       populateUm();
       buildUmLexicon();
       applyUmFilter();
@@ -753,11 +757,17 @@ if('serviceWorker' in navigator && location.protocol.startsWith('http')){
 
 // ---------- Inicialización ----------
 (function init(){
+  const ver=loadJSON(APPV_KEY);
   const pers=loadJSON(PROD_KEY);
-  if(Array.isArray(pers)&&cleanProducts(pers).length){
+  const hasPers=Array.isArray(pers)&&pers.length;
+  if(hasPers&&ver!==APP_VERSION){
+    try{localStorage.removeItem(PROD_KEY);}catch(e){}
+    setStatus('Nueva versión instalada: se quitó el catálogo anterior. Sube el Excel de hoy.');
+  }else if(hasPers&&cleanProducts(pers).length){
     PRODUCTS=cleanProducts(pers);
     customLoaded=true;
   }
+  if(PRODUCTS.length===0)showHint('Sube tu Excel de hoy para comenzar el conteo.');
   cart=loadCart();
   populateUm();
   buildUmLexicon();
