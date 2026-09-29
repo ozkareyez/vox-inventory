@@ -2426,5 +2426,303 @@ if('serviceWorker' in navigator && location.protocol.startsWith('http')){
   renderDiff();
 })();
 </script>
+
+<script>
+/* ============================================================
+   FASE 1 – BÚSQUEDA POR VOZ (parche para Vox Inventory)
+   No cambia la interfaz ni APP_VERSION (no borra el catálogo cargado).
+   Reemplaza: runQuery y probeAlt. La búsqueda escrita queda igual.
+   ============================================================ */
+(function(){
+'use strict';
+
+const has=(o,k)=>Object.prototype.hasOwnProperty.call(o,k);
+
+// Normaliza: minúsculas, sin tildes, "1,5"→"1.5", "500g"→"500 g", sin signos.
+const nrm=s=>String(s==null?'':s).toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+  .replace(/(\d),(\d)/g,'$1.$2')
+  .replace(/[*()\/\-_+:;!?¿¡"'`´,]/g,' ')
+  .replace(/(?<!\d)\.|\.(?!\d)/g,' ')
+  .replace(/(\d)([a-z])/g,'$1 $2')
+  .replace(/\s+/g,' ').trim();
+
+// ---------- Números en español ----------
+const UNI={cero:0,un:1,uno:1,una:1,dos:2,tres:3,cuatro:4,cinco:5,seis:6,siete:7,ocho:8,nueve:9,diez:10,once:11,doce:12,trece:13,catorce:14,quince:15,dieciseis:16,diecisiete:17,dieciocho:18,diecinueve:19,veinte:20,veintiun:21,veintiuno:21,veintidos:22,veintitres:23,veinticuatro:24,veinticinco:25,veintiseis:26,veintisiete:27,veintiocho:28,veintinueve:29};
+const TENS={treinta:30,cuarenta:40,cincuenta:50,sesenta:60,setenta:70,ochenta:80,noventa:90};
+const HUND={cien:100,ciento:100,doscientos:200,trescientos:300,cuatrocientos:400,quinientos:500,seiscientos:600,setecientos:700,ochocientos:800,novecientos:900};
+const DIG={cero:'0',un:'1',uno:'1',una:'1',dos:'2',tres:'3',cuatro:'4',cinco:'5',seis:'6',siete:'7',ocho:'8',nueve:'9'};
+const isDig=t=>t!==undefined&&(/^\d+$/.test(t)||has(DIG,t));
+const digOf=t=>has(DIG,t)?DIG[t]:t;
+
+function readNumber(T,i){
+  const t=T[i];
+  if(t===undefined)return null;
+  if(/^\d+(\.\d+)?$/.test(t))return {value:parseFloat(t),next:i+1,digits:true};
+  if(t==='medio'||t==='media')return {value:0.5,next:i+1};
+  let j=i,total=0,cur=0,any=false;
+  for(;j<T.length;j++){
+    const w=T[j];
+    if(has(HUND,w)){if(cur%1000>=100)break;cur+=HUND[w];any=true;continue;}
+    if(has(TENS,w)){
+      if(cur%100!==0)break;
+      cur+=TENS[w];any=true;
+      if(T[j+1]==='y'&&has(UNI,T[j+2])&&UNI[T[j+2]]>=1&&UNI[T[j+2]]<=9){cur+=UNI[T[j+2]];j+=2;}
+      continue;
+    }
+    if(has(UNI,w)){if(cur%100!==0)break;cur+=UNI[w];any=true;continue;}
+    if(w==='mil'){total+=(cur||1)*1000;cur=0;any=true;continue;}
+    break;
+  }
+  return any?{value:total+cur,next:j}:null;
+}
+// "uno punto cinco" → 1.5
+function readNum(T,i){
+  const n=readNumber(T,i);
+  if(!n)return n;
+  const s=T[n.next];
+  if((s==='punto'||s==='coma')&&isDig(T[n.next+1])){
+    let j=n.next+1,d='';
+    while(j<T.length&&isDig(T[j])){d+=digOf(T[j]);j++;}
+    return {value:parseFloat(n.value+'.'+d),next:j};
+  }
+  return n;
+}
+
+// ---------- Vocabulario ----------
+const W={g:1,gr:1,grs:1,gramo:1,gramos:1,kg:1000,kgs:1000,kl:1000,kls:1000,k:1000,kilo:1000,kilos:1000,kilogramo:1000,kilogramos:1000};
+const ENV=new Set(['caja','cajas','unidad','unidades','und','paca','pacas','paquete','paquetes','bulto','bultos','bolsa','bolsas','bandeja','bandejas','pack','packs']);
+const FILL=new Set(['de','del','para','por','con','en','la','el','los','las','al','que','me','es','son','tengo','hay','mira','busca','buscar','buscame','encuentra','dame','esto','este','esta','aqui','alli','mas','pero','favor','porfa','oye','hola','hey','ayuda','quiero','necesito','ver','referencia','codigo','numero','ref','producto','y','o','a','cantidad','un','una','uno','muestrame']);
+// Lo que se dice al hablar → códigos U.M. del ERP (BJA va con cajas, PAQ con pacas).
+const GROUPS=[
+  {words:['bulto','bultos'],codes:['BTO'],label:'Bultos (BTO)'},
+  {words:['caja','cajas','bandeja','bandejas'],codes:['CJA','BJA'],label:'Cajas (CJA + BJA)'},
+  {words:['paca','pacas','paquete','paquetes','pack','packs'],codes:['PAC','PAQ'],label:'Pacas (PAC + PAQ)'},
+  {words:['bolsa','bolsas'],codes:['BOL'],label:'Bolsas (BOL)'}
+];
+function detectGroup(text){
+  const T=nrm(text).split(' ');
+  for(const t of T){const g=GROUPS.find(g=>g.words.includes(t));if(g)return g;}
+  return null;
+}
+
+// ---------- Analizador: referencia · tamaño · cantidad · nombre ----------
+function parseVoice(text){
+  const T=nrm(text).split(' ').filter(Boolean);
+  const out={code:null,name:[],soft:[],sizeG:null,qty:null,container:null};
+  const runs=[],names=[];
+  let alnum=null,i=0;
+  while(i<T.length){
+    const t=T[i];
+    if(/^[a-z]{1,2}\d{2,}$/.test(t)){alnum=t;i++;continue;}                 // M077
+    if(has(W,t)&&W[t]===1000&&T[i+1]==='y'&&(T[i+2]==='medio'||T[i+2]==='media')){out.sizeG=1500;i+=3;continue;} // kilo y medio
+    const num=readNum(T,i);
+    if(num){
+      const after=T[num.next];
+      if(after&&has(W,after)){out.sizeG=Math.round(num.value*W[after]);i=num.next+1;continue;}  // tamaño
+      if(after&&ENV.has(after)){out.qty=num.value;out.container=after;i=num.next+1;continue;}   // cantidad
+    }
+    if(t==='kilo'){out.sizeG=1000;i++;continue;}
+    if(t==='cantidad'||t==='son'||t==='tengo'||t==='hay'){
+      const n=readNum(T,i+1);
+      if(n){out.qty=n.value;i=n.next;continue;}
+    }
+    if(ENV.has(t)){out.container=out.container||t;i++;continue;}
+    if(isDig(t)){                                                             // dígitos dictados
+      let j=i,run='';
+      while(j<T.length&&isDig(T[j])){run+=digOf(T[j]);j++;}
+      if(run.length>=3)runs.push(run);else out.soft.push(run);
+      i=j;continue;
+    }
+    if(num){
+      if(!num.digits&&num.value>=10000)runs.push(String(num.value));         // "ciento cincuenta y siete mil…"
+      else out.soft.push(String(num.value));
+      i=num.next;continue;
+    }
+    names.push(t);i++;
+  }
+  out.name=names.filter(w=>!FILL.has(w)&&w.length>=2);
+  if(alnum)out.code=alnum;
+  else{
+    runs.sort((a,b)=>b.length-a.length);
+    const r=runs[0];
+    if(r){
+      // 3 dígitos sueltos con otras palabras suelen ser un tamaño ("gatos 500"), no un código.
+      if(r.length>=4||(r.length===3&&!out.name.length&&out.sizeG==null))out.code=r;
+      else out.soft.push(...runs);
+    }
+  }
+  return out;
+}
+
+// ---------- Datos del catálogo ----------
+const cacheTam=new Map(),cacheHay=new Map();
+function tamanoG(p){
+  const k=p.Referencia;
+  if(cacheTam.has(k))return cacheTam.get(k);
+  const d=nrm(p.Descripcion);
+  let g=null,m;
+  if((m=d.match(/\b(\d) (\d) ?(kg|kl|kls|k)\b/)))g=Math.round(parseFloat(m[1]+'.'+m[2])*1000);   // "1 5KG"
+  else{
+    const re=/(\d+(?:\.\d+)?) ?(kg|kgs|kl|kls|k|g|gr|grs)\b/g;let last=null;
+    while((m=re.exec(d)))last=m;                                                                 // "3*1.5Kg" → 1.5 kg
+    if(last)g=Math.round(parseFloat(last[1])*(/^(g|gr|grs)$/.test(last[2])?1:1000));
+  }
+  cacheTam.set(k,g);return g;
+}
+function hayWords(p){
+  const k=p.Referencia;
+  if(!cacheHay.has(k))cacheHay.set(k,nrm(p.Descripcion).split(' ').filter(Boolean));
+  return cacheHay.get(k);
+}
+function lev(a,b){
+  const m=a.length,n=b.length;let prev=Array.from({length:n+1},(_,j)=>j);
+  for(let i=1;i<=m;i++){
+    const cur=[i];
+    for(let j=1;j<=n;j++)cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));
+    prev=cur;
+  }
+  return prev[n];
+}
+// "adulto" encuentra "ADUL", "pequeños" encuentra "PEQ", "cachorro" encuentra "CACH".
+function tokMatch(tok,hw){
+  if(/^\d/.test(tok))return hw.includes(tok);
+  for(const w of hw){
+    if(w===tok)return true;
+    if(tok.length>=3&&w.length>=3&&(w.startsWith(tok)||tok.startsWith(w)))return true;
+    if(tok.length>=4&&w.includes(tok))return true;
+    if(tok.length>=4&&Math.abs(w.length-tok.length)<=2&&lev(tok,w)<=(tok.length>=7?2:1))return true;
+  }
+  return false;
+}
+const refOf=p=>String(p.Referencia||'').trim().toLowerCase();
+
+// ---------- Ranking ----------
+function rank(parsed,list){
+  const res={items:[],mode:'nombre',loose:false,sizeMiss:false};
+  if(parsed.code){
+    const c=parsed.code.toLowerCase();
+    if(c.length>=6||!/^\d+$/.test(c)){
+      const exact=list.filter(p=>{const r=refOf(p);return r===c||r.startsWith(c+'-');});
+      if(exact.length){res.items=exact;res.mode='exacta';return res;}
+    }
+    const ends=list.filter(p=>refOf(p).endsWith(c));
+    const inc=list.filter(p=>!ends.includes(p)&&refOf(p).includes(c));
+    res.items=[...ends,...inc];res.mode='terminacion';res.loose=c.length>=6&&res.items.length>0;
+    return res;
+  }
+  const toks=parsed.name;
+  if(!toks.length&&parsed.sizeG==null)return res;
+  const counted=countedByRef();
+  const scored=[];
+  for(const p of list){
+    const hw=hayWords(p);
+    let m=0;for(const t of toks)if(tokMatch(t,hw))m++;
+    if(toks.length&&m===0)continue;
+    let sc=m*10;for(const s of parsed.soft)if(hw.includes(s))sc+=3;
+    if(!counted[p.Referencia])sc+=1;                       // primero lo que aún no se ha contado
+    sc-=String(p.Descripcion||'').length/200;
+    scored.push({p,m,sc,tam:tamanoG(p)});
+  }
+  let pool=toks.length?scored.filter(x=>x.m===toks.length):scored;
+  if(!pool.length&&toks.length>=2){
+    const need=Math.ceil(toks.length*0.6);
+    pool=scored.filter(x=>x.m>=need);res.loose=pool.length>0;
+  }
+  if(parsed.sizeG!=null&&pool.length){
+    const hit=pool.filter(x=>x.tam!=null&&Math.abs(x.tam-parsed.sizeG)<=1);
+    if(hit.length)pool=hit;
+    else{res.sizeMiss=true;if(!toks.length)pool=[];}
+  }
+  pool.sort((a,b)=>b.sc-a.sc);
+  res.items=pool.map(x=>x.p);
+  return res;
+}
+
+function fmtSize(g){return g>=1000?(g/1000).toString().replace('.',',')+' kg':g+' g';}
+
+// Ejecuta el análisis completo sobre una frase.
+function run(text){
+  const parsed=parseVoice(text);
+  const g=detectGroup(text);
+  const base=umFilter.value?PRODUCTS.filter(p=>String(p.UM||'').trim()===umFilter.value):PRODUCTS;
+  const inGroup=g?base.filter(p=>g.codes.includes(String(p.UM||'').trim().toUpperCase())):base;
+  let r=rank(parsed,inGroup),groupUsed=null,groupDropped=false;
+  if(g){
+    if(r.items.length)groupUsed=g;
+    else{r=rank(parsed,base);groupDropped=r.items.length>0;}
+  }
+  // Último recurso: coincidencia difusa para nombres mal transcritos ("chanchi").
+  if(!r.items.length&&parsed.name.length&&!parsed.code){
+    const f=new Fuse(base.map(conClaveBusqueda),{keys:['Descripcion','Referencia','Busqueda'],threshold:0.5,ignoreLocation:true,minMatchCharLength:2}).search(parsed.name.join(' '));
+    if(f.length)r={items:f.map(x=>x.item._p||x.item),mode:'difusa',loose:true,sizeMiss:false};
+  }
+  return {parsed,r,g,groupUsed,groupDropped,inGroup};
+}
+
+// ---------- Mostrar resultados con la interfaz existente ----------
+function show(items,disp,loose){
+  resultsEl.innerHTML='';resultsAux.innerHTML='';
+  cardProducts=[];activeIdx=-1;offset=0;
+  searchInput.setAttribute('aria-activedescendant','');
+  moreBtn.hidden=true;
+  lastAll=items.map((p,i)=>({item:p,refIndex:i,score:0}));
+  searchWasLoose=!!loose;
+  searchInput.value=disp||'';
+  const n=lastAll.length;
+  searchInput.setAttribute('aria-expanded',n?'true':'false');
+  resultCountEl.textContent=n?n+(n===1?' coincidencia':' coincidencias'):'0 coincidencias';
+  announce(resultCountEl.textContent);
+  if(!n){
+    resultsAux.innerHTML=emptyBlock('Sin coincidencias para «'+escapeHtml(disp||'')+'»','Prueba con menos palabras o dicta el código de la referencia.');
+    return;
+  }
+  if(loose)resultsAux.innerHTML='<div class="empty"><strong>Esto es lo más parecido a «'+escapeHtml(disp||'')+'»</strong>No hubo una coincidencia exacta. Toca el producto si es el correcto.</div>';
+  renderChunk();
+  if(n===1)setActive(0);
+}
+
+// ---------- Reemplazos de las funciones originales ----------
+function probeAlt(alt){
+  return run(alt).r.items;
+}
+
+function runQuery(text,source){
+  const {parsed,r,g,groupUsed,groupDropped,inGroup}=run(text);
+
+  if(!parsed.code&&!parsed.name.length&&parsed.sizeG==null){
+    const lista=g?inGroup:[];
+    show(lista,'',false);
+    if(lista.length)resultCountEl.textContent=lista.length+' referencias de '+g.label;
+    setStatus('Oí «'+text+'», pero no dijiste qué producto.'+(lista.length?' Te dejo las '+lista.length+' referencias de '+g.label+': toca la que buscas.':''),lista.length?'info':'warn');
+    setNote('Nombra el producto, por ejemplo «menú natural», o dicta el código: «uno cinco siete seis ocho nueve».');
+    return;
+  }
+
+  const disp=parsed.code?parsed.code:[...parsed.name,...(parsed.sizeG!=null?[fmtSize(parsed.sizeG)]:[])].join(' ');
+  show(r.items,disp,r.loose);
+
+  const n=r.items.length;
+  const que=parsed.code
+    ?(r.mode==='terminacion'&&parsed.code.length<6?'referencias que terminan en '+parsed.code:'la referencia '+parsed.code)
+    :[parsed.name.length?'«'+parsed.name.join(' ')+'»':'',parsed.sizeG!=null?'tamaño '+fmtSize(parsed.sizeG):''].filter(Boolean).join(', ');
+  let msg='Escuché «'+text+'».';
+  msg+=n?' Busqué '+que+'.':' No encontré nada para '+que+'.';
+  if(n&&r.loose)msg+=' No hubo coincidencia exacta; te muestro lo más parecido.';
+  if(groupUsed)msg+=' Solo en '+groupUsed.label+'.';
+  if(groupDropped)msg+=' No había nada en '+g.label+', así que busqué en todas las unidades.';
+  setStatus(msg,n?'info':'warn');
+
+  const notas=[];
+  if(r.sizeMiss)notas.push('No encontré ese tamaño en el catálogo; te muestro otros del mismo nombre.');
+  if(parsed.qty!=null)notas.push('Oí la cantidad '+parsed.qty+'; se escribe al abrir el producto.');
+  setNote(notas.join(' '));
+}
+
+window.runQuery=runQuery;
+window.probeAlt=probeAlt;
+window.__voxParse=parseVoice;   // para pruebas en la consola: __voxParse("tres cajas de menu natural")
+})();
+</script>
 </body>
 </html>
