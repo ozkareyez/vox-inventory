@@ -1,4 +1,4 @@
-const CACHE = 'vox-inventory-v2';
+const CACHE = 'vox-inventory-v3';
 const PRECACHE = [
   './',
   'index.html',
@@ -11,13 +11,23 @@ const CDN = [
   'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/fuse.js/6.6.2/fuse.min.js'
 ];
+// La app se usa sin señal dentro de la bodega: las tipografías se guardan
+// en la primera visita o el contador pierde la jerarquía del texto.
+const FONT_CSS = 'https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Barlow:wght@400;500;700&display=swap';
+const FONT_FILES = [
+  'https://fonts.gstatic.com/s/archivo/v25/k3kQo8UDI-1M0wlSfdnoLg.woff2',
+  'https://fonts.gstatic.com/s/barlow/v13/7cHpv4kjgoGqM7E_DMs5.woff2',
+  'https://fonts.gstatic.com/s/barlow/v13/7cHqv4kjgoGqM7E3_-gs51os.woff2',
+  'https://fonts.gstatic.com/s/barlow/v13/7cHqv4kjgoGqM7E3t-4s51os.woff2'
+];
+const REMOTE = CDN.concat([FONT_CSS], FONT_FILES);
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
     caches.open(CACHE).then(async (c) => {
       try { await c.addAll(PRECACHE); } catch (err) { /* offline first install: precache local best-effort */ }
       await Promise.all(
-        CDN.map((u) => fetch(u, { mode: 'cors' })
+        REMOTE.map((u) => fetch(u, { mode: 'cors', credentials: 'omit' })
           .then((r) => { if (r.ok) c.put(u, r); })
           .catch(() => {}))
       );
@@ -66,8 +76,13 @@ async function staleWhileRevalidate(req) {
 self.addEventListener('fetch', (e) => {
   const { request } = e;
   if (request.method !== 'GET') return;
-  const fromCDN = CDN.some((u) => request.url.startsWith(u));
-  if (fromCDN) {
+  // Google Fonts sirve con CORS; cualquier subconjunto no precacheado
+  // (latin-ext, por ejemplo) entra también a la caché en tiempo de uso.
+  const remote =
+    REMOTE.some((u) => request.url.startsWith(u)) ||
+    request.url.startsWith('https://fonts.googleapis.com/') ||
+    request.url.startsWith('https://fonts.gstatic.com/');
+  if (remote) {
     e.respondWith(staleWhileRevalidate(request));
     return;
   }
