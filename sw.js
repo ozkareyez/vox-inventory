@@ -1,4 +1,4 @@
-const CACHE = 'vox-inventory-v3';
+const CACHE = 'vox-inventory-v5';
 const PRECACHE = [
   './',
   'index.html',
@@ -9,7 +9,10 @@ const PRECACHE = [
 ];
 const CDN = [
   'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/fuse.js/6.6.2/fuse.min.js'
+  'https://cdnjs.cloudflare.com/ajax/libs/fuse.js/6.6.2/fuse.min.js',
+  // Sin esta librería en caché, la primera visita sin señal deja al contador
+  // sin nube aunque tenga cuenta. Se guarda como el resto de dependencias.
+  'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js'
 ];
 // La app se usa sin señal dentro de la bodega: las tipografías se guardan
 // en la primera visita o el contador pierde la jerarquía del texto.

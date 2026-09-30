@@ -1035,8 +1035,9 @@ function fmtNum(v){const n=Number(v);return Number.isFinite(n)?n.toLocaleString(
 // Existencia del sistema, o null si el archivo no la trae.
 // Acepta el valor crudo de la columna Existencia.
 function systemQty(raw){
-  if(raw===''||raw===null||raw===undefined)return null;
-  const n=Number(raw);
+  const s=String(raw==null?'':raw).trim();
+  if(s==='')return null;
+  const n=Number(s);
   return Number.isFinite(n)?n:null;
 }
 
@@ -1095,7 +1096,14 @@ function cleanProducts(list){
   return (list||[]).filter(r=>{
     const ref=String(r.Referencia||'').trim();
     const desc=String(r.Descripcion||'').trim();
-    return ref && desc && !/^gran\s*total/i.test(ref) && !/^e/i.test(ref);
+    if(!ref||!desc)return false;
+    if(/^e/i.test(ref))return false;
+    // Cierres del volcado ERP: TOTAL, GRAN TOTAL, TOTAL GENERAL, SUBTOTAL,
+    // TOTALES. Se cazan solo como inicio (sin prefijos con guión ni medio del
+    // nombre), para no tocar productos legítimos tipo "TOTAL-PROTEINA".
+    const lr=ref.toLowerCase().replace(/\s+/g,' ').trim();
+    if(lr==='total'||lr==='totales'||/^gran\s*total/.test(lr)||/^subtotal/.test(lr)||/^total\s+general?$/.test(lr))return false;
+    return true;
   });
 }
 
@@ -2722,6 +2730,434 @@ function runQuery(text,source){
 window.runQuery=runQuery;
 window.probeAlt=probeAlt;
 window.__voxParse=parseVoice;   // para pruebas en la consola: __voxParse("tres cajas de menu natural")
+})();
+</script>
+
+<script>
+/* ============================================================
+   FASE 2 · ENTREGA 1 – Nube (Supabase): login + respaldo de conteos y catálogo
+   Va en un bloque de script aparte, después del principal y de fase1-voz.
+   Requiere fase2-schema.sql ejecutado y un usuario creado en Supabase.
+   Local primero: el conteo se guarda en el teléfono y se sube solo.
+   ============================================================ */
+(function(){
+'use strict';
+const SB_URL='https://mhetpmhzycahnjatmdmq.supabase.co';
+// Clave pública (anon). No es un secreto: la seguridad la pone RLS, que
+// filtra cada tabla por owner_id. Si algún día cambia, se cambia aquí.
+const SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1oZXRwbWh6eWNhaG5qYXRtZG1xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA3MjE5MDQsImV4cCI6MjEwNjI5NzkwNH0.LulZ_2ujVrni9fc9uRcgiWBMnwHvkDdeuz1ppKpJXt0';
+const SB_LIB='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js';
+const SB_SRI='sha384-0w2KAL2YHP6wKOkUDzkCDGgVvfmHnj02DHeQ6XcHOgTfFsGyonKOpShMH1x6nk9o';
+const KNOWN_KEY='vox_known_ids';
+const RESET_KEY='vox_day_reset';
+
+let sb=null,uid=null,ready=false,busy=false,dirty=false,failed=false,restoring=false,timer=null;
+let known=new Set((()=>{try{const a=JSON.parse(localStorage.getItem(KNOWN_KEY));return Array.isArray(a)?a:[];}catch(e){return [];}})());
+const sessCache={};
+
+const uuid=()=>(crypto.randomUUID?crypto.randomUUID():'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return (c==='x'?r:(r&3|8)).toString(16);}));
+const todayISO=()=>nowStamp().FechaISO;                    // la misma fecha que usa la bitácora
+const chunk=(a,n)=>{const o=[];for(let i=0;i<a.length;i+=n)o.push(a.slice(i,i+n));return o;};
+function mondayOf(iso){
+  const [y,m,d]=iso.split('-').map(Number);
+  const dt=new Date(Date.UTC(y,m-1,d));
+  dt.setUTCDate(dt.getUTCDate()-((dt.getUTCDay()+6)%7));  // la semana arranca en lunes
+  return dt.toISOString().slice(0,10);
+}
+const saveKnown=()=>{try{localStorage.setItem(KNOWN_KEY,JSON.stringify([...known]));}catch(e){}};
+
+// ---------- Estado visible ----------
+// Aviso de nube. No es una región viva a propósito: sincroniza varias veces
+// por minuto mientras se cuenta, y anunciarlo cada vez taparía los mensajes
+// que sí importan (lo que pasó con el conteo).
+const stateEl=document.createElement('p');
+stateEl.className='note';
+stateEl.id='cloudState';
+document.getElementById('dataCount').insertAdjacentElement('afterend',stateEl);
+
+const STATE_TXT={
+  ok:'☁ Guardado en la nube',
+  sync:'☁ Sincronizando…',
+  offline:'Sin conexión: los conteos se guardan en este teléfono y se suben solos.',
+  local:'Modo sin nube: los conteos solo se guardan en este teléfono.',
+  error:'No se pudo sincronizar. Se reintenta al haber conexión.'
+};
+function setState(kind,msg){
+  let t=STATE_TXT[kind]||'';
+  if(kind==='ok'&&cart.length)t+=' · '+cart.length+(cart.length===1?' conteo':' conteos');
+  stateEl.textContent=t;
+}
+
+// ---------- Puerta de entrada ----------
+const ov=document.createElement('div');
+ov.id='cloudGate';
+ov.style.cssText='position:fixed;inset:0;z-index:100;background:var(--bg);display:none;align-items:center;justify-content:center;padding:24px';
+ov.innerHTML=
+  '<div style="width:min(360px,100%)">'+
+    '<h2 class="sec-title" id="clTitle" style="font-size:1.25rem">Inicia sesión</h2>'+
+    '<p class="sheet-lead">Tus conteos se guardan en la nube para que no se pierdan si el teléfono se apaga.</p>'+
+    '<div class="field-line"><label for="cl-mail">Correo</label>'+
+      '<input id="cl-mail" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false"></div>'+
+    '<div class="field-line"><label for="cl-pass">Contraseña</label>'+
+      '<input id="cl-pass" type="password" autocomplete="current-password"></div>'+
+    '<p class="sheet-error" id="cl-err" role="alert"></p>'+
+    '<div style="display:grid;gap:10px;margin-top:14px">'+
+      '<button type="button" class="btn btn-primary" id="cl-go">Entrar</button>'+
+      '<button type="button" class="btn btn-quiet" id="cl-skip">Continuar sin nube</button>'+
+    '</div>'+
+  '</div>';
+document.body.appendChild(ov);
+const gate=id=>document.getElementById(id);
+
+let gatePrevFocus=null;
+function showLogin(){
+  gatePrevFocus=document.activeElement;
+  ov.style.display='flex';
+  document.body.classList.add('is-locked');
+  const m=gate('cl-mail');
+  if(m)m.focus();
+}
+function hideLogin(){
+  ov.style.display='none';
+  document.body.classList.remove('is-locked');
+  if(gatePrevFocus&&gatePrevFocus.focus&&gatePrevFocus!==document.body)gatePrevFocus.focus();
+  else searchInput.focus();
+}
+// El foco no puede quedarse detrás de la puerta: con teclado, Tab cicla
+// entre los dos botones y los dos campos, y Escape equivale a "sin nube".
+ov.addEventListener('keydown',e=>{
+  if(ov.style.display==='none')return;
+  if(e.key==='Escape'){e.preventDefault();skipCloud();return;}
+  if(e.key!=='Tab')return;
+  const f=ov.querySelectorAll('button,input');
+  if(!f.length)return;
+  const first=f[0],last=f[f.length-1];
+  if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+  else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+});
+
+const outBtn=document.createElement('button');
+outBtn.type='button';
+outBtn.className='linkbtn';
+outBtn.textContent='Cerrar sesión';
+outBtn.hidden=true;
+document.querySelector('.foot-row').appendChild(outBtn);
+
+// ---------- Ciclo semanal y sesión del día ----------
+async function findSession(d){
+  if(sessCache[d])return sessCache[d];
+  const {data,error}=await sb.from('sessions').select('id').eq('fecha',d).order('creada_en').limit(1);
+  if(error)throw error;
+  if(data&&data.length)sessCache[d]=data[0].id;
+  return sessCache[d]||null;
+}
+async function ensureSession(d){
+  const f=await findSession(d);
+  if(f)return f;
+  const cy=await sb.from('cycles')
+    .upsert({owner_id:uid,semana_inicio:mondayOf(d)},{onConflict:'owner_id,semana_inicio'})
+    .select('id').single();
+  if(cy.error)throw cy.error;
+  // Upsert y no insert: con dos teléfonos, la restricción única
+  // (owner_id, fecha) hace que el segundo reciba la sesión del primero en
+  // vez de abrir una segunda para el mismo día y partir los conteos.
+  const s=await sb.from('sessions')
+    .upsert({owner_id:uid,cycle_id:cy.data.id,fecha:d},{onConflict:'owner_id,fecha'})
+    .select('id').single();
+  if(s.error)throw s.error;
+  sessCache[d]=s.data.id;
+  return s.data.id;
+}
+
+// ---------- Catálogo ----------
+async function syncCatalog(){
+  if(!sb||!uid||!ready||!PRODUCTS.length)return;
+  const sid=await ensureSession(todayISO());
+  // Siempre el mismo filtro que la carga del archivo: lo que la app no cuenta
+  // (sin referencia, total general, empieza con E) tampoco sube a la base.
+  const subibles=cleanProducts(PRODUCTS);
+  const prods=subibles.map(p=>({
+    owner_id:uid,
+    codigo_erp:String(p.Referencia),
+    descripcion:String(p.Descripcion),
+    um:p.UM||null,
+    activo:true
+  }));
+  for(const ch of chunk(prods,300)){
+    const {error}=await sb.from('products').upsert(ch,{onConflict:'owner_id,codigo_erp'});
+    if(error)throw error;
+  }
+  // La foto de existencias se rehace entera: el Excel de hoy manda sobre
+  // lo que hubiera de una carga anterior.
+  let r=await sb.from('erp_snapshots').delete().eq('session_id',sid);
+  if(r.error)throw r.error;
+  const snaps=subibles
+    .map(p=>({session_id:sid,owner_id:uid,codigo_erp:String(p.Referencia),existencia:systemQty(p.Existencia)}));
+  for(const ch of chunk(snaps,300)){
+    r=await sb.from('erp_snapshots').upsert(ch,{onConflict:'session_id,codigo_erp'});
+    if(r.error)throw r.error;
+  }
+  r=await sb.from('sessions').update({hora_descarga_erp:new Date().toISOString()}).eq('id',sid);
+  if(r.error)throw r.error;
+}
+
+// Si este teléfono no tiene el Excel del día pero la nube sí, lo recupera:
+// entrar en una bodega con el catálogo en el otro celular no puede ser un
+// callejón sin salida.
+async function restoreCatalog(){
+  if(PRODUCTS.length)return;
+  // Si hoy se reinició el día a mano, el catálogo de la nube es del día
+  // anterior: restaurarlo dejaría al contador contando contra el archivo
+  // viejo sin darse cuenta. Se espera a que suba el Excel de hoy.
+  if(resetDay())return;
+  const sid=await findSession(todayISO());
+  if(!sid)return;
+  const sn=await sb.from('erp_snapshots').select('codigo_erp,existencia').eq('session_id',sid);
+  if(sn.error||!sn.data.length)return;
+  const pr=await sb.from('products').select('codigo_erp,descripcion,um');
+  if(pr.error)throw pr.error;
+  const byCode=Object.create(null);
+  pr.data.forEach(p=>{byCode[p.codigo_erp]=p;});
+  const list=sn.data
+    .filter(s=>byCode[s.codigo_erp])
+    .map(s=>({
+      Referencia:s.codigo_erp,
+      Descripcion:byCode[s.codigo_erp].descripcion,
+      Bodega:'',Peso:'',UM:byCode[s.codigo_erp].um||'',
+      Existencia:s.existencia==null?'':Number(s.existencia),
+      Transito:'',Disponible:'',Comprometida:''
+    }));
+  if(!list.length)return;
+  restoring=true;
+  origApply(list,true);
+  restoring=false;
+  setStatus('Catálogo del día restaurado desde la nube: '+list.length+' productos.','good');
+}
+
+// ---------- Conteos ----------
+const toRow=(c,sid)=>({
+  id:c.id,
+  owner_id:uid,
+  session_id:sid,
+  codigo_erp:String(c.Referencia),
+  descripcion:c.Descripcion||null,
+  um:c.UM||null,
+  cantidad:Number(c.Cantidad),
+  posicion:c.Posicion||null,
+  creado_en:c.ts,
+  anulado:false
+});
+
+// El id se lo pone la nube en el resto de apps; aquí se genera al vuelo y se
+// guarda con el conteo, así el teléfono puede volver a subirlo sin duplicar.
+function assignIds(){
+  cart.forEach(c=>{
+    if(!c.id){c.id=uuid();c.ts=c.ts||new Date().toISOString();}
+  });
+}
+
+async function syncCart(){
+  if(!sb||!uid||!ready)return;
+  if(busy){dirty=true;return;}
+  if(!navigator.onLine){setState('offline');return;}
+  busy=true;dirty=false;failed=false;setState('sync');
+  try{
+    assignIds();
+    const byDate=Object.create(null);
+    cart.forEach(c=>{const d=c.FechaISO||todayISO();(byDate[d]=byDate[d]||[]).push(c);});
+    for(const d of Object.keys(byDate)){
+      const sid=await ensureSession(d);
+      for(const ch of chunk(byDate[d].map(c=>toRow(c,sid)),200)){
+        const {error}=await sb.from('count_lines').upsert(ch,{onConflict:'id'});
+        if(error)throw error;
+      }
+    }
+    // Lo que este teléfono quita se anula, no se borra: así la bitácora de
+    // la nube conserva el rastro y otro dispositivo no ve Affected rows 0.
+    const inCart=new Set(cart.map(c=>c.id));
+    const gone=[...known].filter(id=>!inCart.has(id));
+    for(const ch of chunk(gone,100)){
+      const {error}=await sb.from('count_lines').update({anulado:true}).in('id',ch);
+      if(error)throw error;
+    }
+    known=new Set(inCart);
+    saveKnown();
+    setState('ok');
+  }catch(e){
+    failed=true;
+    console.warn('[nube] sin sincronizar:',e&&e.message);
+    setState('error');
+  }finally{
+    busy=false;
+    if(dirty&&!failed)schedule();
+  }
+}
+function schedule(){clearTimeout(timer);timer=setTimeout(syncCart,800);}
+
+// Trae los conteos de hoy hechos en otro dispositivo: los que este teléfono
+// no conoce (no están en la bitácora ni en la lista de ids que ya se suba).
+async function pullToday(){
+  if(resetDay())return;
+  const sid=await findSession(todayISO());
+  if(!sid)return;
+  const {data,error}=await sb.from('count_lines')
+    .select('id,codigo_erp,descripcion,um,cantidad,posicion,creado_en')
+    .eq('session_id',sid).eq('anulado',false).order('creado_en');
+  if(error)throw error;
+  const have=new Set(cart.map(c=>c.id));
+  let added=0;
+  for(const r of data){
+    if(have.has(r.id)||known.has(r.id))continue;
+    const p=PRODUCTS.find(x=>String(x.Referencia)===r.codigo_erp)||
+      {Referencia:r.codigo_erp,Descripcion:r.descripcion,UM:r.um,Peso:'',Disponible:'',Existencia:''};
+    const dt=new Date(r.creado_en);
+    cart.push(Object.assign({},p,{
+      Cantidad:Number(r.cantidad),
+      Posicion:r.posicion||'',
+      FechaISO:todayISO(),
+      Fecha:dt.toLocaleDateString('es-CO'),
+      Hora:dt.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
+      id:r.id,
+      ts:r.creado_en
+    }));
+    known.add(r.id);
+    added++;
+  }
+  if(added){
+    saveKnown();
+    origSave();
+    renderLog();
+    renderDiff();
+    showToast(added===1?'Se recuperó 1 conteo de la nube.':'Se recuperaron '+added+' conteos de la nube.');
+  }
+}
+
+// ---------- Enganches con la app ----------
+// Los originales se guardan ANTES de sustituir: si no, el envoltorio se
+// llamaría a sí mismo en bucle.
+const origSave=window.saveCart;
+const origApply=window.applyCatalog;
+
+window.saveCart=function(){
+  assignIds();
+  origSave.apply(this,arguments);
+  if(sb&&uid&&ready)schedule();
+};
+window.applyCatalog=function(list,fromFile){
+  origApply.apply(this,arguments);
+  if(fromFile){
+    // Ya hay Excel de hoy: el día deja de estar reiniciado y la nube manda.
+    try{localStorage.removeItem(RESET_KEY);}catch(e){}
+    if(!restoring)syncCatalog().catch(()=>setState('error'));
+  }
+};
+
+async function start(){
+  hideLogin();
+  outBtn.hidden=false;
+  setState('sync');
+  try{
+    await restoreCatalog();
+    await pullToday();
+    ready=true;
+    await syncCatalog();
+    await syncCart();
+  }catch(e){
+    // La nube no está: la app sigue contando en local, no se rompe nada.
+    ready=true;
+    setState('error');
+  }
+}
+function skipCloud(){
+  hideLogin();
+  setState('local');
+}
+
+async function login(){
+  const err=gate('cl-err');
+  err.textContent='';
+  const email=gate('cl-mail').value.trim();
+  const pass=gate('cl-pass').value;
+  if(!email||!pass){err.textContent='Escribe el correo y la contraseña.';return;}
+  const btn=gate('cl-go');
+  btn.disabled=true;
+  const {data,error}=await sb.auth.signInWithPassword({email,password:pass});
+  btn.disabled=false;
+  if(error){
+    err.textContent=/network|fetch|failed to fetch/i.test(error.message)
+      ?'Sin conexión. Inténtalo otra vez con señal.'
+      :'Correo o contraseña incorrectos.';
+    return;
+  }
+  uid=data.user.id;
+  gate('cl-pass').value='';
+  start();
+}
+
+gate('cl-go').onclick=login;
+gate('cl-pass').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){e.preventDefault();login();}
+});
+gate('cl-skip').onclick=skipCloud;
+
+outBtn.onclick=async()=>{
+  try{await sb.auth.signOut();}catch(e){}
+  uid=null;ready=false;
+  outBtn.hidden=true;
+  Object.keys(sessCache).forEach(k=>delete sessCache[k]);
+  setState('local');
+  showLogin();
+};
+
+window.addEventListener('online',()=>{if(ready)syncCart();});
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible'&&ready&&navigator.onLine){
+    pullToday().then(syncCart).catch(()=>{});
+  }
+});
+
+// ---------- Día reiniciado a mano ----------
+// "Empezar de nuevo" vacía el catálogo a propósito. Si la nube lo devolviera
+// en la recarga, el contador volvería al archivo de ayer creyendo que es el
+// de hoy. Se marca el día y esa restauración se salta hasta que suba el Excel.
+const dayWasReset=()=>{try{return localStorage.getItem(RESET_KEY)===todayISO();}catch(e){return false;}};
+const markDayReset=()=>{try{localStorage.setItem(RESET_KEY,todayISO());}catch(e){}};
+const resetDay=()=>dayWasReset();
+document.getElementById('resetDayBtn').addEventListener('click',markDayReset);
+
+// ---------- Arranque ----------
+async function init(){
+  try{
+    if(!window.supabase){
+      await new Promise((res,rej)=>{
+        const s=document.createElement('script');
+        s.src=SB_LIB;s.integrity=SB_SRI;s.crossOrigin='anonymous';
+        s.onload=res;s.onerror=rej;
+        document.head.appendChild(s);
+      });
+    }
+    sb=window.supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:true,autoRefreshToken:true}});
+    const {data}=await sb.auth.getSession();
+    if(data&&data.session){
+      uid=data.session.user.id;
+      start();
+    }else{
+      showLogin();
+    }
+  }catch(e){
+    // Sin señal la primera vez, o sin la librería: la app queda en local.
+    setState('local');
+  }
+}
+
+// La primera visita en la bodega suele ser sin señal. Cuando vuelve, se
+// reintenta una sola vez: si ya había puerta abierta, no se vuelve a abrir.
+window.addEventListener('online',()=>{
+  if(sb)return;
+  if(document.getElementById('cloudGate').style.display!=='none')return;
+  init();
+});
+init();
 })();
 </script>
 </body>
