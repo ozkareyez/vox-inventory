@@ -42,7 +42,6 @@
   --focus:#8fc7e4;
   --mark-bg:#f2a93b;
   --mark-ink:#0f1417;
-  --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1.2l4 3.6 4-3.6' fill='none' stroke='%2393a1a7' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   --lift:0 -1px 0 var(--rule2), 0 18px 44px rgba(0,0,0,.5);
 
@@ -238,29 +237,67 @@ h1,h2,p{margin:0;}
   margin:16px 0 0;
 }
 
-.field{display:flex;align-items:center;gap:8px;}
-
 .field-label{
   font-size:.75rem;font-weight:500;color:var(--ink2);white-space:nowrap;
 }
 
 .select{
-  appearance:none;-webkit-appearance:none;
-  padding:8px 28px 8px 10px;
+  display:inline-flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:8px 10px;
   min-height:38px;
   font:500 .8125rem var(--f-ui);
   color:var(--ink);
   background-color:var(--surf);
-  background-image:var(--chev);
-  background-repeat:no-repeat;
-  background-position:right 10px center;
-  background-size:10px 6px;
   border:1px solid var(--rule2);
   border-radius:var(--r-ctl);
   cursor:pointer;
   max-width:min(52vw,240px);
-  text-overflow:ellipsis;
+  text-align:left;
 }
+.select:hover{border-color:var(--ink2);}
+.select[aria-expanded="true"]{border-color:var(--signal);color:var(--signal);}
+.select[disabled]{opacity:.5;cursor:default;}
+.select-val{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.select svg{flex:none;color:var(--ink2);transition:transform .16s;}
+.select[aria-expanded="true"] svg{transform:rotate(180deg);}
+
+/* El filtro de unidad admite varias a la vez. Un <select multiple> pediría Ctrl
+   o Cmd para cada marca y en el teléfono abriría una pantalla aparte: aquí son
+   interruptores que se tocan y se ven marcados a la vista.
+
+   Rejilla de dos columnas y no flexbox en columna: la lista tiene que salir
+   debajo del botón, no debajo de la etiqueta. */
+.ums{
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr);
+  align-items:center;
+  gap:10px 8px;
+  min-width:0;
+}
+/* El botón se ajusta a su texto: estirado a la anchura de la columna, un
+   «2 unidades» ocuparía media pantalla. */
+.ums .select{justify-self:start;}
+
+.ums-panel{grid-column:2;display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:0;}
+.ums-panel[hidden]{display:none;}
+
+.ums-opts{display:flex;flex-wrap:wrap;gap:8px;max-width:100%;}
+
+.ums-opt{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:7px 11px;min-height:40px;
+  font:500 .8125rem var(--f-ui);
+  color:var(--ink);
+  background:var(--surf);
+  border:1px solid var(--rule2);
+  border-radius:var(--r-chip);
+  cursor:pointer;
+}
+.ums-opt:hover{border-color:var(--signal);color:var(--signal);}
+.ums-opt[aria-pressed="true"]{background:var(--signal-soft);border-color:var(--signal);color:var(--signal);}
+.ums-n{font:400 .75rem var(--f-ui);color:var(--ink2);font-variant-numeric:tabular-nums;}
+.ums-opt[aria-pressed="true"] .ums-n{color:var(--signal);}
+.ums-empty{font-size:.75rem;color:var(--ink2);max-width:34ch;}
 
 .dropzone{flex:1;min-width:190px;}
 
@@ -314,7 +351,11 @@ h1,h2,p{margin:0;}
 .sec-meta{
   font-size:.75rem;color:var(--ink2);
   font-variant-numeric:tabular-nums;
-  display:flex;align-items:baseline;gap:10px;flex:none;
+  display:flex;align-items:baseline;gap:10px;
+  /* Con varias unidades marcadas el conteo queda largo: si no cede, empuja la
+     página de lado y aparece una barra horizontal en el teléfono. */
+  flex:0 1 auto;min-width:0;
+  flex-wrap:wrap;justify-content:flex-end;text-align:right;
 }
 
 .sec-note{
@@ -480,8 +521,8 @@ mark{
 
 .log-row{
   display:grid;
-  grid-template-columns:minmax(0,1fr) auto auto;
-  align-items:center;gap:12px;
+  grid-template-columns:minmax(0,1fr) auto auto auto;
+  align-items:center;gap:8px;
   padding:11px 4px 11px 2px;
   border-top:1px solid var(--rule);
 }
@@ -512,6 +553,8 @@ mark{
   color:var(--ink2);cursor:pointer;
 }
 .iconbtn:hover{color:var(--short);background:var(--surf);}
+/* Corregir no es borrar: el lápiz se avisa con el color de la cuenta, no en rojo. */
+.iconbtn-edit:hover{color:var(--signal);}
 
 /* ============================================================
    TABLA DE DIFERENCIAS
@@ -841,9 +884,18 @@ th.num{padding-right:10px;}
   <p class="note" id="note"></p>
 
   <div class="filters">
-    <div class="field">
-      <label class="field-label" for="umFilter">Unidad</label>
-      <select id="umFilter" class="select"></select>
+    <div class="ums">
+      <span class="field-label" id="umLabel">Unidad</span>
+      <button type="button" class="select" id="umFilter" aria-expanded="false" aria-controls="umPanel" aria-labelledby="umLabel umFilterVal">
+        <span class="select-val" id="umFilterVal">Todas</span>
+        <svg width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <path d="M1 1.2l4 3.6 4-3.6"></path>
+        </svg>
+      </button>
+      <div class="ums-panel" id="umPanel" hidden>
+        <div class="ums-opts" id="umOpts" role="group" aria-labelledby="umLabel"></div>
+        <button type="button" class="linkbtn" id="umClear">Quitar el filtro de unidad</button>
+      </div>
     </div>
     <div class="dropzone" id="dropzone">
       <button type="button" class="drop" id="fileBtn">
@@ -1032,6 +1084,33 @@ function escapeReg(s){return String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
 function fmtQty(v){return (v===''||v===null||v===undefined) ? '—' : v;}
 function fmtNum(v){const n=Number(v);return Number.isFinite(n)?n.toLocaleString('es-CO'):String(v);}
 
+// Vencimiento siempre en MM/AAAA, se teclea como se teclea: «082026» y «8/26»
+// terminan en el mismo sitio. La barra se respeta donde esté: si se quitara
+// antes de contar los dígitos, «8/26» acabaría siendo «82/6».
+function normVenc(v){
+  const s=String(v==null?'':v).trim();
+  const cut=s.indexOf('/');
+  if(cut>=0){
+    const mm=s.slice(0,cut).replace(/\D/g,'').slice(0,2).padStart(2,'0');
+    return mm+'/'+s.slice(cut+1).replace(/\D/g,'').slice(0,4);
+  }
+  const d=s.replace(/\D/g,'').slice(0,6);
+  if(d.length<=2)return d;
+  return d.slice(0,2)+'/'+d.slice(2);
+}
+// Mes 01–12 y cuatro cifras de año. Vacío sí vale: la mayoría de los conteos no
+// son de un lote que caduque.
+function vencOk(v){
+  if(!v)return true;
+  return /^(0[1-9]|1[0-2])\/\d{4}$/.test(v);
+}
+// Lo tecleado solo puede ser dígito o barra. Si las letras se tragan en
+// silencio, «agosto» se guarda como sin vencimiento y quien lo escribió no se
+// entera de que se le pasó.
+function vencRawOk(raw){
+  return !/\D/.test(String(raw).replace(/\//g,''));
+}
+
 // Existencia del sistema, o null si el archivo no la trae.
 // Acepta el valor crudo de la columna Existencia.
 function systemQty(raw){
@@ -1042,9 +1121,15 @@ function systemQty(raw){
 }
 
 // Lo ya contado de cada referencia, según la bitácora.
-function countedByRef(){
+// Al corregir una fila se pasa su índice para no contarla dos veces: el
+// pendiente se calcula con el resto de la bitácora y la cifra nueva se suma
+// al escribir.
+function countedByRef(exceptIdx){
   const m=Object.create(null);
-  cart.forEach(c=>{m[c.Referencia]=(m[c.Referencia]||0)+(Number(c.Cantidad)||0);});
+  cart.forEach((c,i)=>{
+    if(exceptIdx!=null&&i===exceptIdx)return;
+    m[c.Referencia]=(m[c.Referencia]||0)+(Number(c.Cantidad)||0);
+  });
   return m;
 }
 
@@ -1196,6 +1281,10 @@ const noteEl=document.getElementById('note');
 const srCountEl=document.getElementById('srCount');
 const dataCountEl=document.getElementById('dataCount');
 const umFilter=document.getElementById('umFilter');
+const umFilterVal=document.getElementById('umFilterVal');
+const umPanel=document.getElementById('umPanel');
+const umOpts=document.getElementById('umOpts');
+const umClear=document.getElementById('umClear');
 const resultsEl=document.getElementById('results');
 const resultsAux=document.getElementById('resultsAux');
 const resultCountEl=document.getElementById('resultCount');
@@ -1235,49 +1324,125 @@ const VOICE_ERRORS={
 };
 
 // ============================================================
-//  FILTRO POR UNIDAD
+//  FILTRO POR UNIDAD (selección múltiple)
+//  Sin unidades marcadas se cuentan todas: es el estado de partida
+//  y al que vuelve el botón de quitar. Marcadas dos o más, el
+//  filtro es la unión de esas unidades.
 // ============================================================
+let umSel=new Set();
+let umValues=[];
+
+// Los valores salen recortados del Excel; sin recortar, un "UND " con
+// espacio final nunca casaría con la lista y el filtro no filtraría nada.
+const umOf=p=>String(p.UM||'').trim();
+
+function umLabel(){
+  if(!umValues.length)return 'Sin unidades';
+  if(!umSel.size)return 'Todas';
+  const a=[...umSel].sort();
+  return a.length===1?a[0]:a.length+' unidades';
+}
+function umNames(){
+  return [...umSel].sort().join(', ');
+}
+// «unidad CAJA» o «unidades CAJA, BULTO»: el mismo dato en las frases
+// que arma el estado, para que el contador no lea un filtro mal dicho.
+function umPhrase(){
+  if(!umSel.size)return '';
+  return (umSel.size===1?'unidad ':'unidades ')+umNames();
+}
+
 function filteredCount(){
-  const um=umFilter.value;
-  return um?PRODUCTS.filter(p=>String(p.UM)===um).length:PRODUCTS.length;
+  return umSel.size?PRODUCTS.filter(p=>umSel.has(umOf(p))).length:PRODUCTS.length;
 }
 function populateUm(){
   const counts=new Map();
-  PRODUCTS.forEach(p=>{const v=String(p.UM||'').trim();if(v)counts.set(v,(counts.get(v)||0)+1);});
-  const vals=[...counts.keys()].sort();
-  const prev=umFilter.value;
-  if(!vals.length){
-    umFilter.innerHTML='<option value="">Sin unidades</option>';
-    umFilter.disabled=true;
-    return;
-  }
-  umFilter.innerHTML='<option value="">Todas</option>'+
-    vals.map(v=>'<option value="'+escapeHtml(v)+'">'+escapeHtml(v)+' ('+counts.get(v)+')</option>').join('');
-  umFilter.disabled=false;
-  if(prev&&vals.includes(prev))umFilter.value=prev;else umFilter.value='';
+  PRODUCTS.forEach(p=>{const v=umOf(p);if(v)counts.set(v,(counts.get(v)||0)+1);});
+  umValues=[...counts.keys()].sort();
+  // Una unidad marcada que el archivo nuevo ya no trae se cae sola: si no,
+  // el contador filtraría por algo inexistente y no habría cómo quitarlo.
+  umSel=new Set([...umSel].filter(v=>counts.has(v)));
+  umOpts.innerHTML=umValues.length
+    ? umValues.map(v=>'<button type="button" class="ums-opt" data-um="'+escapeHtml(v)+'" aria-pressed="false">'+
+        escapeHtml(v)+'<span class="ums-n">'+counts.get(v)+'</span></button>').join('')
+    : '<p class="ums-empty">Este Excel no trae columna de unidad, así que no hay nada que filtrar.</p>';
+  syncUmUi();
+}
+function syncUmUi(){
+  umFilterVal.textContent=umLabel();
+  umFilter.disabled=!umValues.length;
+  umClear.hidden=!umSel.size;
+  umOpts.querySelectorAll('.ums-opt').forEach(b=>{
+    b.setAttribute('aria-pressed',umSel.has(b.dataset.um)?'true':'false');
+  });
 }
 function applyUmFilter(){
-  const um=umFilter.value;
-  const base=um?PRODUCTS.filter(p=>String(p.UM)===um):PRODUCTS;
+  const base=umSel.size?PRODUCTS.filter(p=>umSel.has(umOf(p))):PRODUCTS;
   SEARCHABLE=base.map(conClaveBusqueda);
   fuse=buildFuse(SEARCHABLE);
 }
 function updateCount(){
-  const um=umFilter.value;
   const parts=[filteredCount()+(PRODUCTS.length===1?' producto':' productos')];
   if(customLoaded)parts.push('archivo cargado');
   else if(PRODUCTS.length)parts.push('catálogo de ejemplo');
   dataCountEl.innerHTML=parts.map(escapeHtml).join('<i class="div"></i>')+
-    (um?'<i class="div"></i>'+escapeHtml('unidad '+um):'');
+    (umSel.size?'<i class="div"></i>'+escapeHtml(umPhrase()):'');
   sampleBtn.hidden=PRODUCTS.length>0;
   sampleBtn.textContent=customLoaded?'Cambiar al catálogo de ejemplo':'Cargar el catálogo de ejemplo';
   fileLabel.textContent=customLoaded?'Reemplazar el Excel de hoy':'Arrastra el Excel de hoy';
 }
-umFilter.addEventListener('change',()=>{
+// Marcar unidades y reaplicar el filtro es siempre el mismo gesto:
+// el contador no espera a pulsar nada más.
+function setUms(list){
+  umSel=new Set(list);
+  syncUmUi();
   applyUmFilter();
   updateCount();
   doSearch(searchInput.value);
-  searchInput.focus();
+  // Un solo anuncio, con el filtro nuevo y lo que quedó: la región es
+  // aria-live y dos escrituras.readirían la frase entera dos veces.
+  announce((umSel.size?umPhrase()+'. ':'Sin filtro de unidad. ')+
+    (lastAll.length
+      ? lastAll.length+(lastAll.length===1?' producto.':' productos.')
+      : 'Sin resultados.'));
+}
+function toggleUmPanel(force){
+  const open=typeof force==='boolean'?force:umPanel.hidden;
+  umPanel.hidden=!open;
+  umFilter.setAttribute('aria-expanded',open?'true':'false');
+  if(open){
+    const first=umOpts.querySelector('.ums-opt');
+    if(first)first.focus();
+  }else if(umPanel.contains(document.activeElement)){
+    // Si el botón no lo enfocó al abrir (Safari no lo hace al tocar), el foco
+    // quedó en <body> y se perdería el lugar del teclado al cerrar.
+    umFilter.focus();
+  }
+}
+umFilter.addEventListener('click',()=>toggleUmPanel());
+umOpts.addEventListener('click',e=>{
+  const b=e.target.closest('.ums-opt');
+  if(!b)return;
+  const v=b.dataset.um;
+  if(umSel.has(v))umSel.delete(v);else umSel.add(v);
+  setUms([...umSel]);
+  // El foco se queda en el interruptor que se acaba de tocar: si se fuera al
+  // buscador, marcar tres unidades seguidas sería imposible con el teclado.
+  b.focus();
+});
+umClear.addEventListener('click',()=>{
+  setUms([]);
+  umFilter.focus();
+});
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Escape'||umPanel.hidden)return;
+  e.preventDefault();
+  toggleUmPanel(false);
+});
+document.addEventListener('click',e=>{
+  if(umPanel.hidden)return;
+  if(umPanel.contains(e.target)||umFilter.contains(e.target))return;
+  toggleUmPanel(false);
 });
 
 // ============================================================
@@ -1337,15 +1502,15 @@ function doSearch(q,opts){
   moreBtn.hidden=true;
 
   if(!query){
-    // Elegir una unidad en el desplegable ya es una instrucción: se listan los
-    // productos de esa unidad. Si no, el selector serviría para tapar la
-    // búsqueda sin poder usarla.
-    if(umFilter.value&&SEARCHABLE.length){
+    // Marcar unidades ya es una instrucción: se listan los productos de esas
+    // unidades. Si no, el interruptor serviría para tapar la búsqueda sin
+    // poder usarla.
+    if(umSel.size&&SEARCHABLE.length){
       lastAll=SEARCHABLE.map((p,i)=>({item:p,refIndex:i,score:0}));
       offset=0;searchWasLoose=false;
       searchInput.setAttribute('aria-expanded','true');
       const n=lastAll.length;
-      resultCountEl.textContent=n+(n===1?' producto en unidad ':' productos en unidad ')+umFilter.value;
+      resultCountEl.textContent=n+(n===1?' producto en ':' productos en ')+umPhrase();
       announce(resultCountEl.textContent);
       renderChunk();
       return;
@@ -1385,8 +1550,8 @@ function doSearch(q,opts){
     announce('Sin coincidencias');
     resultsAux.innerHTML=emptyBlock(
       'Sin coincidencias para «'+escapeHtml(query)+'»',
-      umFilter.value
-        ? 'Estás filtrando por '+escapeHtml(umFilter.value)+'. Quita el filtro o prueba con menos palabras.'
+      umSel.size
+        ? 'Estás filtrando por '+escapeHtml(umPhrase())+'. Quita el filtro o prueba con menos palabras.'
         : 'Prueba con menos palabras o con parte del nombre, por ejemplo «gatos 500».'
     );
     return;
@@ -1542,6 +1707,9 @@ let sheetMode=null;
 
 function openSheet(mode){
   sheetMode=mode;
+  // La lista de unidades se cierra con la hoja: si no, queda abierta detrás
+  // del velo con un filtro a medias.
+  if(!umPanel.hidden)toggleUmPanel(false);
   // Al abrir con el ratón, el navegador deja el foco en <body> porque la fila
   // no es enfocable. Si no guardamos un control real, al cerrar perdemos el
   // lugar del teclado y el siguiente Tab arranca otra vez desde arriba.
@@ -1602,9 +1770,17 @@ function askConfirm(opts){
 // ============================================================
 //  SELECCIÓN Y CONTEO
 // ============================================================
-function selectProduct(p){
+// editIdx es el índice en la bitácora de la fila que se está corrigiendo. Sin
+// él, la hoja cuenta un producto nuevo y la cifra se agrega al final.
+function selectProduct(p,editIdx){
+  const editing=typeof editIdx==='number';
+  const prev=editing?cart[editIdx]:null;
   const sys=systemQty(p.Existencia);
-  const counted=countedByRef()[p.Referencia]||0;
+  const counted=(countedByRef(editing?editIdx:null))[p.Referencia]||0;
+
+  // La cifra que se corrige solo aparece en el aviso, así que el aviso va
+  // descrito por el campo: si no, el lector de pantalla no la anunciaría.
+  const leadId=editing?' sheetLead':'';
 
   sheetBody.innerHTML =
     '<div class="sheet-ref">'+
@@ -1619,9 +1795,12 @@ function selectProduct(p){
       '<span>Peso '+fmtQty(p.Peso)+' kg</span><i class="div"></i>'+
       '<span>Disponible '+fmtQty(p.Disponible)+'</span>'+
     '</div>'+
+    (editing?'<p class="sheet-lead" id="sheetLead">Corrigiendo el conteo de '+stampLabel(prev)+' ('+fmtNum(prev.Cantidad)+'). Escribe la cifra correcta; si dejas ese campo vacío solo cambian la posición y el vencimiento.</p>':'')+
     '<div class="tally">'+
       '<div class="tally-row"><span class="tally-lbl">En el sistema</span>'+
         '<span class="tally-val">'+(sys===null?'Sin dato':fmtNum(sys)+' '+escapeHtml(p.UM||''))+'</span></div>'+
+      // Editar y contar proyectan el mismo total: lo ya contado por otros más lo
+      // que se está escribiendo. La fila corregida no se cuenta dos veces.
       '<div class="tally-row"><span class="tally-lbl">Ya contado</span>'+
         '<span class="tally-val" id="tvCounted">'+fmtNum(counted)+'</span></div>'+
       '<div class="tally-row" data-key="pending"><span class="tally-lbl">Pendiente</span>'+
@@ -1629,18 +1808,28 @@ function selectProduct(p){
     '</div>'+
     '<div class="counter" id="counter">'+
       '<button type="button" id="qtyMinus" aria-label="Quitar una unidad">−</button>'+
-      '<input type="number" id="qtyInput" inputmode="numeric" min="0" step="1" placeholder="0" data-autofocus aria-describedby="sheetErr sheetLive" aria-label="Cantidad contada ahora">'+
+      // Al corregir, el campo arranca vacío y la cifra anterior va en el aviso:
+      // un input numérico no admite seleccionar texto ni colocar el cursor, así
+      // que teclear sobre el número viejo lo dejaría con un dígito de más.
+      '<input type="number" id="qtyInput" inputmode="numeric" min="0" step="1" placeholder="'+(editing?fmtNum(prev.Cantidad):'0')+'" data-autofocus aria-describedby="sheetErr sheetLive'+leadId+'" aria-label="'+(editing?'Cantidad corregida':'Cantidad contada ahora')+'">'+
       '<button type="button" id="qtyPlus" aria-label="Sumar una unidad">+</button>'+
     '</div>'+
     '<p class="sheet-live" id="sheetLive"></p>'+
     '<div class="field-line">'+
       '<label for="posInput">Posición</label>'+
-      '<input type="text" id="posInput" placeholder="Bodega 3" autocomplete="off">'+
+      '<input type="text" id="posInput" placeholder="Bodega 3" autocomplete="off" value="'+escapeHtml(editing?prev.Posicion||'':'')+'">'+
+    '</div>'+
+    '<div class="field-line">'+
+      '<label for="vencInput">Vencimiento</label>'+
+      // Texto y no type="month": el selector nativo muestra el mes con el
+      // idioma del navegador y su valor es AAAA-MM, no el MM/AAAA que se usa
+      // en el almacén y que luego hay que leer en la etiqueta del producto.
+      '<input type="text" id="vencInput" placeholder="08/2026" inputmode="numeric" autocomplete="off" maxlength="7" value="'+escapeHtml(editing?normVenc(prev.Vencimiento||''):'')+'">'+
     '</div>'+
     '<p class="sheet-error" id="sheetErr"></p>'+
     '<div class="sheet-actions">'+
       '<button type="button" class="btn btn-quiet" id="qtyCancel">Cancelar</button>'+
-      '<button type="button" class="btn btn-primary" id="qtyAdd">Registrar conteo</button>'+
+      '<button type="button" class="btn btn-primary" id="qtyAdd">'+(editing?'Guardar cambios':'Registrar conteo')+'</button>'+
     '</div>';
 
   const qtyInput=document.getElementById('qtyInput');
@@ -1650,6 +1839,7 @@ function selectProduct(p){
   const tvCounted=document.getElementById('tvCounted');
   const tvPending=document.getElementById('tvPending');
   const posInput=document.getElementById('posInput');
+  const vencInput=document.getElementById('vencInput');
 
   const setErr=(msg)=>{err.textContent=msg;counter.dataset.invalid=msg?'true':'false';};
 
@@ -1689,31 +1879,65 @@ function selectProduct(p){
 
   const step=(d)=>{
     const cur=parseFloat(qtyInput.value);
-    const next=Math.max(0,(Number.isFinite(cur)?cur:0)+d);
-    qtyInput.value=next;
+    // Con el campo vacío, los botones +/− arrancan desde la cifra que se está
+    // corrigiendo: pulsar «+» sobre un 40 debe dar 41, no 1.
+    const base=editing&&!Number.isFinite(cur)?(Number(prev.Cantidad)||0):(Number.isFinite(cur)?cur:0);
+    qtyInput.value=Math.max(0,base+d);
     setErr('');
     refresh();
   };
 
   const commit=()=>{
-    const qty=parseFloat(qtyInput.value);
-    if(!Number.isFinite(qty)||qty<=0){
-      setErr('Escribe una cantidad mayor que 0.');
+    const raw=qtyInput.value.trim();
+    const blank=raw==='';
+    let typed=parseFloat(raw);
+
+    // Al corregir, campo vacío significa «no toques la cantidad»: permite
+    // arreglar solo la posición sin teclear un número que ya estaba bien.
+    if(editing&&blank)typed=Number(prev.Cantidad)||0;
+    if(!Number.isFinite(typed)||typed<=0){
+      // Corregir a cero no es una corrección: si el conteo no fue, la fila se
+      // quita con la ✕ de la bitácora, que deja rastro y se puede deshacer.
+      setErr(editing
+        ?'Escribe una cantidad mayor que 0. Si ese conteo no fue, quita la fila con la ✕.'
+        :'Escribe una cantidad mayor que 0.');
       qtyInput.focus();
       return;
     }
+    const qty=typed;
     const pos=posInput.value.trim();
-    const t=nowStamp();
-    cart.push({...p,Cantidad:qty,Posicion:pos,Fecha:t.Fecha,FechaISO:t.FechaISO,Hora:t.Hora});
+    const venc=normVenc(vencInput.value);
+    if(!vencRawOk(vencInput.value)||!vencOk(venc)){
+      setErr('El vencimiento va en mes y año: 08/2026.');
+      vencInput.focus();
+      return;
+    }
+    const before=editing?(Number(prev.Cantidad)||0):null;
+
+    if(editing){
+      cart[editIdx]=Object.assign({},prev,{Cantidad:qty,Posicion:pos,Vencimiento:venc});
+    }else{
+      const t=nowStamp();
+      cart.push({...p,Cantidad:qty,Posicion:pos,Vencimiento:venc,Fecha:t.Fecha,FechaISO:t.FechaISO,Hora:t.Hora});
+    }
     saveCart();
     closeSheet();
     renderLog();
     renderDiff();
-    searchInput.value='';
-    doSearch('');
+    if(editing){
+      // El buscador se queda como estaba: quien corrige está en la bitácora y
+      // no está empezando el siguiente producto.
+      doSearch(searchInput.value);
+      focusLogBtn('[data-edit="'+editIdx+'"]');
+    }else{
+      searchInput.value='';
+      doSearch('');
+    }
 
     const left=pendingOf(sys,counted+qty);
-    let msg='Conteo registrado.';
+    let msg=editing?'Conteo actualizado':'Conteo registrado.';
+    if(editing&&before===qty)msg='Conteo actualizado: la cantidad sigue en '+fmtNum(qty)+'.';
+    else if(editing)msg='Conteo actualizado: de '+fmtNum(before)+' a '+fmtNum(qty)+'.';
     if(left===null)msg+=' El archivo no trae existencia para comparar.';
     else if(left>0)msg+=' Quedan '+fmtNum(left)+(left===1?' unidad por buscar.':' unidades por buscar.');
     else if(left===0)msg+=' La referencia queda completa.';
@@ -1721,7 +1945,7 @@ function selectProduct(p){
     if(pos)msg='Registrado en '+pos+'. '+msg;
     setStatus(msg,left!==null&&left<0?'info':'good');
     setNote('');
-    searchInput.focus();
+    if(!editing)searchInput.focus();
   };
 
   document.getElementById('qtyMinus').onclick=()=>step(-1);
@@ -1732,9 +1956,30 @@ function selectProduct(p){
   qtyInput.addEventListener('input',()=>{setErr('');refresh();});
   qtyInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();commit();}});
   posInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();commit();}});
+  vencInput.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();commit();}});
+  // La barra se pone sola al pasar el segundo dígito: quien teclea «082026»
+  // escribe seis teclas y ve 08/2026. Si se edita por la mitad, el cursor se
+  // queda donde está para no saltar al final a cada tecla.
+  // Si hay letras se dejan tal cual: borrarlas en silencio haría que «agosto»
+  // se guardara como sin vencimiento sin que nadie se entere.
+  vencInput.addEventListener('input',()=>{
+    const was=vencInput.value;
+    if(vencRawOk(was)){
+      const now=normVenc(was);
+      if(now!==was){
+        const atEnd=vencInput.selectionStart===was.length;
+        vencInput.value=now;
+        if(!atEnd){
+          const p=Math.min(now.length,was.length);
+          vencInput.setSelectionRange(p,p);
+        }
+      }
+    }
+    setErr('');
+  });
 
   refresh();
-  openSheet('count');
+  openSheet(editing?'edit':'count');
 }
 
 // ============================================================
@@ -1745,11 +1990,26 @@ const cartCountEl=document.getElementById('cartCount');
 const clearAllBtn=document.getElementById('clearAllBtn');
 let removedStack=[];
 
+const stampIsToday=c=>c.FechaISO===new Date().toISOString().slice(0,10);
+
+// La misma marca de tiempo en texto plano: los atributos aria no admiten HTML,
+// así que la fecha de ayer se junta con un espacio y no con el punto separador.
+function stampText(c){
+  if(stampIsToday(c))return String(c.Hora||'');
+  return [String(c.Fecha||''),String(c.Hora||'')].filter(Boolean).join(' ');
+}
+
 function stampLabel(c){
-  const today=new Date().toISOString().slice(0,10);
   // La fecha solo cuando no es hoy: repetirla en cada fila es ruido.
-  if(c.FechaISO===today)return escapeHtml(c.Hora||'');
+  if(stampIsToday(c))return escapeHtml(c.Hora||'');
   return escapeHtml(c.Fecha||'')+'<i class="div"></i>'+escapeHtml(c.Hora||'');
+}
+
+// Tras corregir o quitar una fila, el foco se queda en la bitácora: si se
+// perdiera en <body>, el siguiente Tab volvería a empezar desde el título.
+function focusLogBtn(sel){
+  const b=logList.querySelector(sel);
+  if(b)b.focus();
 }
 
 function renderLog(){
@@ -1764,6 +2024,7 @@ function renderLog(){
 
   logList.innerHTML=cart.map((c,i)=>{
     const pos=String(c.Posicion||'').trim();
+    const venc=normVenc(c.Vencimiento);
     return '<div class="log-row">'+
       '<div>'+
         '<div class="log-top"><span class="ref">'+escapeHtml(c.Referencia)+'</span>'+
@@ -1772,16 +2033,28 @@ function renderLog(){
         '<div class="meta"><span>'+escapeHtml(c.UM||'—')+'</span>'+
           '<i class="div"></i><span>Peso '+fmtQty(c.Peso)+' kg</span>'+
           (pos?'<i class="div"></i><span>Posición '+escapeHtml(pos)+'</span>':'')+
+          (venc?'<i class="div"></i><span>Vence '+escapeHtml(venc)+'</span>':'')+
         '</div>'+
       '</div>'+
       '<span class="log-qty">'+fmtNum(c.Cantidad)+'</span>'+
+      '<button type="button" class="iconbtn iconbtn-edit" data-edit="'+i+'" aria-label="Corregir el conteo de '+escapeHtml(c.Referencia)+', '+escapeHtml(stampText(c))+'">'+
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 20h4L18 10l-4-4L4 16v4z"></path><path d="M13.5 6.5l4 4"></path></svg>'+
+      '</button>'+
       '<button type="button" class="iconbtn" data-i="'+i+'" aria-label="Quitar el conteo de '+escapeHtml(c.Referencia)+'">'+
         '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18"></path></svg>'+
       '</button>'+
     '</div>';
   }).reverse().join('');
 
-  logList.querySelectorAll('.iconbtn').forEach(b=>{
+  logList.querySelectorAll('.iconbtn-edit').forEach(b=>{
+    b.addEventListener('click',()=>{
+      const i=+b.dataset.edit;
+      const c=cart[i];
+      if(c)selectProduct(c,i);
+    });
+  });
+
+  logList.querySelectorAll('.iconbtn[data-i]').forEach(b=>{
     b.addEventListener('click',()=>{
       const idx=+b.dataset.i;
       const [removed]=cart.splice(idx,1);
@@ -1790,6 +2063,7 @@ function renderLog(){
       saveCart();
       renderLog();
       renderDiff();
+      focusLogBtn('[data-edit="'+Math.min(idx,cart.length-1)+'"]');
       showToast('Conteo de '+removed.Referencia+' quitado.','Deshacer',undoLast);
     });
   });
@@ -1947,7 +2221,10 @@ function runQuery(text,source){
 
   if(det){
     spokenUm=det.um;
-    umFilter.value=det.um;
+    // La voz es una orden nueva, no una marca más: si el contador había marcado
+    // varias unidades a mano, esta reemplaza esa selección en vez de juntarse.
+    umSel=new Set([det.um]);
+    syncUmUi();
     q=text.replace(new RegExp('\\s*'+escapeReg(det.word)+'\\s*','i'),' ').trim();
     applyUmFilter();
     updateCount();
@@ -1960,11 +2237,9 @@ function runQuery(text,source){
   // en vez de quedarse con las manos vacías.
   if(voz&&soloRuido(text)){
     doSearch('',{loose:false});
-    if(umFilter.value){applyUmFilter();updateCount();}
-    doSearch('',{loose:false});
     const n=lastAll.length;
     setStatus('Oí «'+text+'», pero no dijiste qué producto.'+
-      (n?' Te dejo las '+n+' referencias en unidad '+umFilter.value+': toca la que buscas.':''),
+      (n?' Te dejo las '+n+' referencias en '+umPhrase()+': toca la que buscas.':''),
       n?'info':'warn');
     setNote('Nombra el producto y la cantidad, por ejemplo «tres cajas de menu natural».');
     return;
@@ -1975,8 +2250,9 @@ function runQuery(text,source){
   // Dijiste "cajas" pero el producto está en otra unidad: el contador no
   // debería quedarse con las manos vacías. Se reintenta sin el filtro.
   let reintentoUM=false;
-  if(voz&&!lastAll.length&&umFilter.value){
-    umFilter.value='';
+  if(voz&&!lastAll.length&&umSel.size){
+    umSel=new Set();
+    syncUmUi();
     applyUmFilter();
     updateCount();
     doSearch(q,{loose:true});
@@ -1985,7 +2261,7 @@ function runQuery(text,source){
 
   // El estado se arma una sola vez: la región es aria-live y si se escribiera
   // tres veces el lector de pantalla anunciaría tres frases.
-  const sinColumnaUM=![...umFilter.options].some(o=>o.value);
+  const sinColumnaUM=!umValues.length;
   let extra='';
   if(voz&&envase&&!det){
     extra=sinColumnaUM
@@ -1993,17 +2269,17 @@ function runQuery(text,source){
       : (UM_AMBIGUOS.has(envase)
           ? '«'+envase+'» no es una sola unidad: puede ser bolsa grande, paquete o caja. Busqué en todas.'
           : 'No reconocí «'+envase+'» como una unidad de este archivo, así que busqué en todas.');
-  }else if(umFilter.value){
+  }else if(det){
+    // El filtro puede venir marcado a mano y no tener nada que ver con lo que
+    // se acaba de decir, así que el mensaje se arma con la unidad dicha.
     extra=lastAll.length
       ? 'Conté '+lastAll.length+(lastAll.length===1?' referencia':' referencias')+' en unidad '+spokenUm+'.'
-      : 'No encontré nada en unidad '+spokenUm+'. Prueba con otra unidad o quítala en el desplegable.';
-  }else if(det){
-    extra='No encontré nada en unidad '+spokenUm+'. Prueba con otra unidad o quítala en el desplegable.';
+      : 'No encontré nada en unidad '+spokenUm+'. Prueba con otra unidad o quita el filtro de arriba.';
   }
 
   if(reintentoUM){
     setStatus('No había nada en unidad '+spokenUm+', así que busqué en todas.','info');
-    setNote('Si el filtro te estorba, elijes «Todas» en el desplegable de unidad.');
+    setNote('Si el filtro te estorba, quita las unidades marcadas arriba.');
     return;
   }
 
@@ -2350,7 +2626,11 @@ exportBtn.addEventListener('click',()=>{
   if(cart.length===0)return;
   const detalle=cart.map(c=>({
     Fecha:c.FechaISO||c.Fecha||'', Hora:c.Hora, Referencia:c.Referencia, Descripcion:c.Descripcion,
-    Posicion:c.Posicion||'', Bodega:c.Bodega, UM:c.UM, Cantidad:c.Cantidad
+    Posicion:c.Posicion||'', Bodega:c.Bodega, UM:c.UM, Cantidad:c.Cantidad,
+    // El vencimiento va junto a cada conteo y no en el resumen: una misma
+    // referencia puede quedar partida en varios lotes con fechas distintas y
+    // una sola columna de totales tendría que elegir una o juntarlas con comas.
+    Vencimiento:normVenc(c.Vencimiento)
   }));
   const byRef={};
   cart.forEach(c=>{
@@ -2653,7 +2933,7 @@ function fmtSize(g){return g>=1000?(g/1000).toString().replace('.',',')+' kg':g+
 function run(text){
   const parsed=parseVoice(text);
   const g=detectGroup(text);
-  const base=umFilter.value?PRODUCTS.filter(p=>String(p.UM||'').trim()===umFilter.value):PRODUCTS;
+  const base=umSel.size?PRODUCTS.filter(p=>umSel.has(umOf(p))):PRODUCTS;
   const inGroup=g?base.filter(p=>g.codes.includes(String(p.UM||'').trim().toUpperCase())):base;
   let r=rank(parsed,inGroup),groupUsed=null,groupDropped=false;
   if(g){
