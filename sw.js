@@ -1,4 +1,4 @@
-const CACHE = 'vox-inventory-v5';
+const CACHE = 'vox-inventory-v6';
 const PRECACHE = [
   './',
   'index.html',
@@ -10,6 +10,9 @@ const PRECACHE = [
 const CDN = [
   'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/fuse.js/6.6.2/fuse.min.js',
+  // El lector de código de barras usa la cámara; sin esta librería en caché
+  // el botón no sirve dentro de la bodega, donde no hay señal.
+  'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js',
   // Sin esta librería en caché, la primera visita sin señal deja al contador
   // sin nube aunque tenga cuenta. Se guarda como el resto de dependencias.
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js'

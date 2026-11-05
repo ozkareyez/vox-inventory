@@ -19,6 +19,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Barlow:wght@400;500;700&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" integrity="sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/fuse.js/6.6.2/fuse.min.js" integrity="sha384-zPE55eyESN+FxCWGEnlNxGyAPJud6IZ6TtJmXb56OFRGhxZPN4akj9rjA3gw5Qqa" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js" integrity="sha384-BzBxP10ZE72aitqj5UMmUsbKFliP/DZqA8Wq+BNNhlIJDGoEd1tpkMYXOg9+n6sB" crossorigin="anonymous"></script>
 <style>
 /* ============================================================
    TOKENS
@@ -167,7 +168,7 @@ h1,h2,p{margin:0;}
 
 /* El micrófono lleva etiqueta a propósito: un icono solo no deja claro que
    ahí es donde se activa la búsqueda hablada, que es la función principal. */
-.mic{
+.mic,.scanbtn{
   flex:none;height:48px;padding:0 14px;
   display:inline-flex;align-items:center;justify-content:center;gap:8px;
   background:var(--surf2);
@@ -177,12 +178,14 @@ h1,h2,p{margin:0;}
   cursor:pointer;
   transition:background-color .12s linear,color .12s linear,border-color .12s linear;
 }
-.mic-label{font:600 .875rem/1 var(--f-ui);letter-spacing:.01em;}
-.mic:hover{background:var(--bg);}
-.mic[aria-pressed="true"]{
+.scanbtn{width:48px;padding:0;}
+.mic-label,.scanbtn-label{font:600 .875rem/1 var(--f-ui);letter-spacing:.01em;}
+.scanbtn-label{display:none;}
+.mic:hover,.scanbtn:hover{background:var(--bg);}
+.mic[aria-pressed="true"],.scanbtn[aria-pressed="true"]{
   background:var(--signal);border-color:var(--signal);color:var(--on-signal);
 }
-.mic[hidden]{display:none;}
+.mic[hidden],.scanbtn[hidden]{display:none;}
 
 .instrument-sep{width:1px;align-self:stretch;background:var(--rule2);margin:0 10px;flex:none;}
 
@@ -828,6 +831,84 @@ th.num{padding-right:10px;}
 .toast .linkbtn{color:var(--bg);text-decoration-color:currentColor;flex:none;}
 
 /* ============================================================
+   LECTOR DE CÓDIGO DE BARRAS
+   ============================================================ */
+.scan{
+  position:fixed;inset:0;z-index:70;
+  display:flex;align-items:center;justify-content:center;
+  padding:16px;
+  background:rgba(6,10,12,.82);
+}
+.scan[hidden]{display:none;}
+.scan-panel{
+  width:min(520px,100%);max-height:100%;overflow-y:auto;
+  padding:16px var(--gutter) calc(18px + env(safe-area-inset-bottom,0px));
+  background:var(--surf);
+  border:1px solid var(--rule2);
+  border-radius:var(--r-hero);
+  box-shadow:var(--lift);
+}
+.scan-head{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+}
+.scan-sub{
+  margin:4px 0 0;
+  font-size:.75rem;color:var(--ink2);
+}
+.scan-stage{
+  position:relative;
+  margin-top:14px;
+  aspect-ratio:4/3;
+  background:#000;
+  border:1px solid var(--rule2);
+  border-radius:var(--r-ctl);
+  overflow:hidden;
+}
+.scan-video{
+  position:absolute;inset:0;
+  width:100%;height:100%;
+  object-fit:cover;
+}
+.scan-video[hidden]{display:none;}
+.scan-guide{
+  position:absolute;left:7%;right:7%;top:36%;height:28%;
+  border:2px solid var(--signal);
+  border-radius:4px;
+  box-shadow:0 0 0 9999px rgba(0,0,0,.3);
+  pointer-events:none;
+}
+.scan-hint{
+  position:absolute;left:0;right:0;bottom:0;
+  margin:0;padding:8px 10px;
+  background:rgba(6,10,12,.78);
+  color:#e6ebec;
+  font-size:.75rem;line-height:1.35;
+  text-align:center;
+}
+.scan-hint:empty{display:none;}
+.scan-manual{margin-top:16px;}
+.scan-label{
+  display:block;margin-bottom:6px;
+  font-size:.75rem;color:var(--ink2);
+}
+.scan-input-row{display:flex;gap:8px;}
+.scan-input{
+  flex:1;min-width:0;
+  padding:10px 12px;
+  background:var(--surf2);
+  border:1px solid var(--rule2);
+  border-radius:var(--r-ctl);
+  color:var(--ink);
+  font:500 1rem var(--f-ui);
+  font-variant-numeric:tabular-nums;
+}
+.scan-input:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 2px var(--focus);}
+.scan-input-row .btn{
+  width:auto;flex:none;
+  min-height:44px;padding:10px 16px;
+}
+
+/* ============================================================
    MOVIMIENTO REDUCIDO
    ============================================================ */
 @media (prefers-reduced-motion: reduce){
@@ -845,6 +926,8 @@ th.num{padding-right:10px;}
 @media (min-width:600px){
   .masthead{padding-top:34px;}
   .select{max-width:none;}
+  .scanbtn{width:auto;padding:0 14px;}
+  .scanbtn-label{display:inline;}
 }
 
 @media (max-width:420px){
@@ -871,6 +954,12 @@ th.num{padding-right:10px;}
         <path d="M12 17.5V21"></path>
       </svg>
       <span class="mic-label">Voz</span>
+    </button>
+    <button type="button" id="barcodeBtn" class="scanbtn" aria-label="Escanear código de barras" title="Escanear código de barras">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <path d="M4 5v14M8 5v14M12 5v14M16 5v14M20 5v14"></path>
+      </svg>
+      <span class="scanbtn-label">Código</span>
     </button>
     <span class="instrument-sep" id="instrumentSep" aria-hidden="true"></span>
     <input id="searchInput" class="search" type="text"
@@ -955,6 +1044,34 @@ th.num{padding-right:10px;}
 <div class="sheet" id="sheet" hidden>
   <div class="sheet-grip" aria-hidden="true"></div>
   <div role="dialog" aria-modal="true" aria-labelledby="sheetTitle" id="sheetBody"></div>
+</div>
+
+<div class="scan" id="scan" hidden>
+  <div class="scan-panel" role="dialog" aria-modal="true" aria-labelledby="scanTitle">
+    <div class="scan-head">
+      <div>
+        <h2 class="sec-title" id="scanTitle">Escanear código</h2>
+        <p class="scan-sub">Se usan los últimos 6 dígitos como referencia.</p>
+      </div>
+      <button type="button" class="iconbtn" id="scanClose" aria-label="Cerrar el lector">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </div>
+    <div class="scan-stage">
+      <video id="scanVideo" class="scan-video" playsinline muted autoplay hidden></video>
+      <div class="scan-guide" aria-hidden="true"></div>
+      <p class="scan-hint" id="scanHint"></p>
+    </div>
+    <form class="scan-manual" id="scanForm">
+      <label class="scan-label" for="scanInput">O escribe el código completo</label>
+      <div class="scan-input-row">
+        <input id="scanInput" class="scan-input" type="text" inputmode="numeric"
+               autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+               placeholder="7591234154530">
+        <button type="submit" class="btn btn-primary" id="scanGo">Buscar</button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite">
@@ -1691,6 +1808,8 @@ document.addEventListener('keydown',e=>{
   const t=e.target;
   if(t&&(t.tagName==='INPUT'||t.tagName==='SELECT'||t.tagName==='TEXTAREA'||t.isContentEditable))return;
   if(!sheetEl.hidden)return;
+  const scannerEl=document.getElementById('scan');
+  if(scannerEl&&!scannerEl.hidden)return;
   e.preventDefault();
   searchInput.focus();
   searchInput.select();
@@ -3006,6 +3125,164 @@ function runQuery(text,source){
   if(parsed.qty!=null)notas.push('Oí la cantidad '+parsed.qty+'; se escribe al abrir el producto.');
   setNote(notas.join(' '));
 }
+
+// ============================================================
+//  LECTOR DE CÓDIGO DE BARRAS
+//  La cámara decodifica el código y la referencia son los
+//  últimos 6 dígitos. El campo manual sirve de respaldo cuando
+//  no hay cámara, no hay permiso o se usa un lector físico.
+// ============================================================
+const BARCODE_REF_LEN=6;
+const scanEl=document.getElementById('scan');
+const scanVideo=document.getElementById('scanVideo');
+const scanHint=document.getElementById('scanHint');
+const scanClose=document.getElementById('scanClose');
+const scanForm=document.getElementById('scanForm');
+const scanInput=document.getElementById('scanInput');
+const barcodeBtn=document.getElementById('barcodeBtn');
+let scanReader=null, scanStream=null, scanToken=0, scanReturnFocus=null;
+
+function setScanHint(msg){scanHint.textContent=msg||'';}
+function barcodeDigits(raw){return String(raw==null?'':raw).replace(/\D+/g,'');}
+
+function stopScan(){
+  const reader=scanReader;
+  scanReader=null;
+  if(reader){try{reader.reset();}catch(e){}}
+  if(scanStream){
+    try{scanStream.getTracks().forEach(t=>t.stop());}catch(e){}
+    scanStream=null;
+  }
+  try{scanVideo.pause();}catch(e){}
+  try{scanVideo.srcObject=null;}catch(e){}
+  scanVideo.hidden=true;
+}
+
+function cameraErrorText(err){
+  const name=err&&err.name?err.name:'';
+  if(name==='NotAllowedError'||name==='SecurityError')return 'El navegador bloqueó la cámara. Habilítala en los permisos o escribe el código abajo.';
+  if(name==='NotFoundError'||name==='OverconstrainedError')return 'No se encontró una cámara. Escribe el código abajo.';
+  if(name==='NotReadableError')return 'La cámara está ocupada por otra aplicación. Ciérrala o escribe el código abajo.';
+  return 'No se pudo abrir la cámara. Escribe el código abajo.';
+}
+
+function openScanner(){
+  if(!scanEl.hidden)return;
+  const prev=document.activeElement;
+  scanReturnFocus=prev&&prev!==document.body&&typeof prev.focus==='function'?prev:barcodeBtn;
+  scanEl.hidden=false;
+  document.body.classList.add('is-locked');
+  scanInput.value='';
+  scanVideo.hidden=true;
+  setScanHint('Apunta al código de barras…');
+  scanClose.focus();
+  if(!window.isSecureContext){
+    setScanHint('La cámara necesita https. Escribe el código abajo.');
+    return;
+  }
+  if(!window.ZXing){
+    setScanHint('El lector de cámara no está disponible. Escribe el código abajo.');
+    return;
+  }
+  if(!navigator.mediaDevices||typeof navigator.mediaDevices.getUserMedia!=='function'){
+    setScanHint('Este navegador no da acceso a la cámara. Escribe el código abajo.');
+    return;
+  }
+  startScan(++scanToken);
+}
+
+async function startScan(token){
+  let reader;
+  try{
+    reader=new ZXing.BrowserMultiFormatReader(undefined,200);
+  }catch(e){
+    setScanHint('No se pudo preparar el lector. Escribe el código abajo.');
+    return;
+  }
+  scanReader=reader;
+  scanVideo.hidden=false;
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia(
+      {audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}}
+    );
+    if(token!==scanToken){
+      stream.getTracks().forEach(t=>t.stop());
+      return;
+    }
+    scanStream=stream;
+    await reader.decodeFromStream(stream,scanVideo,result=>{
+      if(!result||token!==scanToken||!scanReader)return;
+      acceptBarcode(result.getText(),true);
+    });
+  }catch(err){
+    if(token!==scanToken)return;
+    stopScan();
+    setScanHint(cameraErrorText(err));
+  }
+}
+
+function acceptBarcode(raw,fromCamera){
+  const digits=barcodeDigits(raw);
+  if(digits.length<BARCODE_REF_LEN){
+    if(fromCamera)setScanHint('Leí «'+raw+'», pero no tiene '+BARCODE_REF_LEN+' dígitos. Prueba otro código.');
+    else{
+      setScanHint('El código necesita al menos '+BARCODE_REF_LEN+' dígitos.');
+      scanInput.focus();
+    }
+    return;
+  }
+  closeScanner();
+  searchBarcode(digits);
+}
+
+function searchBarcode(digits){
+  const ref=digits.slice(-BARCODE_REF_LEN);
+  if(!PRODUCTS.length){
+    setStatus('No hay catálogo cargado. Sube el Excel para buscar por código.','warn');
+    setNote('El lector busca referencias dentro del catálogo del día.');
+    return;
+  }
+  const base=umSel.size?PRODUCTS.filter(p=>umSel.has(umOf(p))):PRODUCTS;
+  const r=rank({code:ref,name:[],soft:[],sizeG:null,qty:null,container:null},base);
+  show(r.items,ref,r.loose);
+  const where=digits.length>BARCODE_REF_LEN?' los últimos '+BARCODE_REF_LEN+' dígitos ('+ref+')':' la referencia '+ref;
+  if(r.items.length){
+    setStatus('Código leído: busqué'+where+'.','info');
+    setNote(r.items.length===1?'Toca el producto para registrar el conteo.':'Hay varias coincidencias; toca la que corresponda.');
+    return;
+  }
+  setStatus('Código leído, pero la referencia '+ref+' no está en el catálogo.','warn');
+  setNote('Revisa que el Excel de hoy traiga esa referencia o búscala por nombre.');
+}
+
+function closeScanner(){
+  if(scanEl.hidden)return;
+  scanToken++;
+  stopScan();
+  scanEl.hidden=true;
+  document.body.classList.remove('is-locked');
+  const back=scanReturnFocus;
+  scanReturnFocus=null;
+  if(back&&back.focus)back.focus();
+}
+
+barcodeBtn.addEventListener('click',openScanner);
+scanClose.addEventListener('click',closeScanner);
+scanEl.addEventListener('click',e=>{if(e.target===scanEl)closeScanner();});
+scanForm.addEventListener('submit',e=>{
+  e.preventDefault();
+  acceptBarcode(scanInput.value,false);
+});
+document.addEventListener('keydown',e=>{
+  if(scanEl.hidden)return;
+  if(e.key==='Escape'){e.preventDefault();closeScanner();return;}
+  if(e.key!=='Tab')return;
+  const f=scanEl.querySelectorAll('button,input,[tabindex]:not([tabindex="-1"])');
+  if(!f.length)return;
+  const first=f[0],last=f[f.length-1];
+  if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+  else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+});
 
 window.runQuery=runQuery;
 window.probeAlt=probeAlt;
