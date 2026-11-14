@@ -1507,6 +1507,7 @@ function updateCount(){
   sampleBtn.hidden=PRODUCTS.length>0;
   sampleBtn.textContent=customLoaded?'Cambiar al catálogo de ejemplo':'Cargar el catálogo de ejemplo';
   fileLabel.textContent=customLoaded?'Reemplazar el Excel de hoy':'Arrastra el Excel de hoy';
+  exportBtn.disabled=cart.length===0&&PRODUCTS.length===0;
 }
 // Marcar unidades y reaplicar el filtro es siempre el mismo gesto:
 // el contador no espera a pulsar nada más.
@@ -2134,7 +2135,7 @@ function focusLogBtn(sel){
 function renderLog(){
   cartCountEl.textContent=cart.length+(cart.length===1?' conteo':' conteos');
   clearAllBtn.hidden=cart.length===0;
-  exportBtn.disabled=cart.length===0;
+  exportBtn.disabled=cart.length===0&&PRODUCTS.length===0;
 
   if(cart.length===0){
     logList.innerHTML=emptyBlock('Todavía no has contado nada','Busca un producto arriba y registra cuántas unidades hay.');
@@ -2742,7 +2743,7 @@ function readFile(file){
 //  EXPORTAR
 // ============================================================
 exportBtn.addEventListener('click',()=>{
-  if(cart.length===0)return;
+  if(cart.length===0&&PRODUCTS.length===0)return;
   const detalle=cart.map(c=>({
     Fecha:c.FechaISO||c.Fecha||'', Hora:c.Hora, Referencia:c.Referencia, Descripcion:c.Descripcion,
     Posicion:c.Posicion||'', Bodega:c.Bodega, UM:c.UM, Cantidad:c.Cantidad,
@@ -2751,32 +2752,50 @@ exportBtn.addEventListener('click',()=>{
     // una sola columna de totales tendría que elegir una o juntarlas con comas.
     Vencimiento:normVenc(c.Vencimiento)
   }));
-  const byRef={};
+
+  // Lo contado por referencia, para cruzar el conteo con el archivo cargado.
+  const counted={};
   cart.forEach(c=>{
-    if(!byRef[c.Referencia])byRef[c.Referencia]={Referencia:c.Referencia,Descripcion:c.Descripcion,UM:c.UM,Total:0,Conteos:0,Existencia:c.Existencia};
-    byRef[c.Referencia].Total+=Number(c.Cantidad)||0;
-    byRef[c.Referencia].Conteos+=1;
+    const ref=String(c.Referencia);
+    if(!counted[ref])counted[ref]={total:0,conteos:0};
+    counted[ref].total+=Number(c.Cantidad)||0;
+    counted[ref].conteos+=1;
   });
-  const totales=Object.values(byRef).map(t=>{
-    const sys=systemQty(t.Existencia);
-    return {
-      Referencia:t.Referencia, Descripcion:t.Descripcion, UM:t.UM,
-      Contado:t.Total,
+
+  // El informe sale del archivo que se subió, no solo de lo contado: así
+  // aparecen todas las referencias, incluidas las que quedaron en cero.
+  const totales=[];
+  const seen=Object.create(null);
+  const addRow=p=>{
+    const ref=String(p.Referencia);
+    if(seen[ref])return;
+    seen[ref]=true;
+    const c=counted[ref]||{total:0,conteos:0};
+    const sys=systemQty(p.Existencia);
+    totales.push({
+      Referencia:ref, Descripcion:p.Descripcion||'', Bodega:p.Bodega||'', UM:p.UM||'',
+      Contado:c.total,
       Sistema:sys===null?'':sys,
-      // Dos columnas y ninguna con signo: el que abra el Excel no tiene que
-      // interpretar un -7 para saber que sobran 7, ni sumar una columna con
-      // negativos. En cada fila una de las dos vale 0.
-      Pendiente:sys===null?'':Math.max(0,sys-t.Total),
-      Sobran:sys===null?'':Math.max(0,t.Total-sys),
-      Conteos:t.Conteos
-    };
+      // Diferencia = contado - sistema. Negativo significa que falta, positivo
+      // que sobra. Una sola columna en vez de separar pendiente y sobrante.
+      Diferencia:sys===null?'':c.total-sys,
+      Conteos:c.conteos,
+      Estado:c.conteos>0?'Contado':(sys===null?'Sin existencia':'No contado')
+    });
+  };
+  PRODUCTS.forEach(addRow);
+  // Si un conteo quedó de un archivo anterior, no se pierde: se agrega igual.
+  cart.forEach(c=>{
+    if(!seen[String(c.Referencia)])addRow({Referencia:c.Referencia,Descripcion:c.Descripcion,Bodega:c.Bodega,UM:c.UM,Existencia:c.Existencia});
   });
+
   const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(detalle),"Conteos individuales");
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(totales),"Totales por producto");
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(totales),"Inventario completo");
+  if(detalle.length)XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(detalle),"Conteos individuales");
   const stamp=new Date().toISOString().slice(0,10).replace(/-/g,'');
   XLSX.writeFile(wb,"conteo_inventario_"+stamp+".xlsx");
-  showToast('Archivo exportado con '+cart.length+(cart.length===1?' conteo':' conteos')+'.');
+  const sinContar=totales.filter(t=>t.Estado==='No contado').length;
+  showToast('Archivo exportado: '+totales.length+(totales.length===1?' referencia':' referencias')+', '+cart.length+(cart.length===1?' conteo':' conteos')+(sinContar?', '+sinContar+' sin contar.':'.'));
 });
 
 // ============================================================
