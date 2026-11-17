@@ -649,11 +649,6 @@ th.num{padding-right:10px;}
   display:flex;align-items:center;justify-content:space-between;gap:16px;
   margin-top:14px;flex-wrap:wrap;
 }
-.role-toggle{
-  display:inline-flex;align-items:center;gap:8px;cursor:pointer;
-  font:500 .8125rem var(--f-ui);color:var(--ink2);
-}
-.role-toggle input{width:16px;height:16px;accent-color:var(--ink);}
 
 /* ============================================================
    HOJA DE CONTEO
@@ -1038,7 +1033,6 @@ th.num{padding-right:10px;}
   <footer class="foot">
     <button type="button" class="btn btn-primary" id="exportBtn" disabled>Exportar a Excel</button>
     <div class="foot-row">
-      <label class="role-toggle" for="reportRole"><input type="checkbox" id="reportRole"> Genera el informe</label>
       <button type="button" class="linkbtn" id="resetDayBtn">Empezar de nuevo</button>
       <button type="button" class="linkbtn" id="installBtn" hidden>Instalar la app</button>
     </div>
@@ -2753,6 +2747,7 @@ function detailFromCart(list){
   return list.map(c=>({
     Fecha:c.FechaISO||c.Fecha||'', Hora:c.Hora, Referencia:c.Referencia, Descripcion:c.Descripcion,
     Posicion:c.Posicion||'', Bodega:c.Bodega, UM:c.UM, Cantidad:c.Cantidad,
+    ContadoPor:c.ContadoPor||'',
     // El vencimiento va junto a cada conteo y no en el resumen: una misma
     // referencia puede quedar partida en varios lotes con fechas distintas y
     // una sola columna de totales tendría que elegir una o juntarlas con comas.
@@ -3343,16 +3338,18 @@ window.__voxParse=parseVoice;   // para pruebas en la consola: __voxParse("tres 
 'use strict';
 const SB_URL='https://mhetpmhzycahnjatmdmq.supabase.co';
 // Clave pública (anon). No es un secreto: la seguridad la pone RLS, que
-// filtra cada tabla por owner_id. Si algún día cambia, se cambia aquí.
+// filtra cada tabla por los equipos del usuario. Si cambia, se cambia aquí.
 const SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1oZXRwbWh6eWNhaG5qYXRtZG1xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA3MjE5MDQsImV4cCI6MjEwNjI5NzkwNH0.LulZ_2ujVrni9fc9uRcgiWBMnwHvkDdeuz1ppKpJXt0';
 const SB_LIB='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js';
 const SB_SRI='sha384-0w2KAL2YHP6wKOkUDzkCDGgVvfmHnj02DHeQ6XcHOgTfFsGyonKOpShMH1x6nk9o';
 const KNOWN_KEY='vox_known_ids';
 const RESET_KEY='vox_day_reset';
-const ROLE_KEY='vox_report_role';
+const TEAM_KEY='vox_team';
 
-let sb=null,uid=null,ready=false,busy=false,dirty=false,failed=false,restoring=false,timer=null;
-let role=localStorage.getItem(ROLE_KEY)==='responsable'?'responsable':'contador';
+const cachedTeam=(()=>{try{const t=JSON.parse(localStorage.getItem(TEAM_KEY));return t&&t.id?t:null;}catch(e){return null;}})();
+let sb=null,uid=null,userEmail=null,team=cachedTeam,teamRole=cachedTeam&&cachedTeam.rol==='owner'?'owner':'contador',teamUsers=Object.create(null);
+let ready=false,busy=false,dirty=false,failed=false,restoring=false,timer=null;
+let role=teamRole==='owner'?'responsable':'contador';
 let known=new Set((()=>{try{const a=JSON.parse(localStorage.getItem(KNOWN_KEY));return Array.isArray(a)?a:[];}catch(e){return [];}})());
 const sessCache={};
 
@@ -3366,6 +3363,15 @@ function mondayOf(iso){
   return dt.toISOString().slice(0,10);
 }
 const saveKnown=()=>{try{localStorage.setItem(KNOWN_KEY,JSON.stringify([...known]));}catch(e){}};
+const saveTeam=()=>{try{
+  if(team)localStorage.setItem(TEAM_KEY,JSON.stringify({id:team.id,codigo:team.codigo,nombre:team.nombre,rol:teamRole}));
+  else localStorage.removeItem(TEAM_KEY);
+}catch(e){}};
+const randomCode=()=>{
+  const a='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',r=new Uint32Array(6);
+  if(crypto.getRandomValues)crypto.getRandomValues(r);else for(let i=0;i<6;i++)r[i]=Math.floor(Math.random()*a.length);
+  return [...r].map(v=>a[v%a.length]).join('');
+};
 
 // ---------- Estado visible ----------
 // Aviso de nube. No es una región viva a propósito: sincroniza varias veces
@@ -3389,17 +3395,12 @@ function setState(kind,msg){
   stateEl.textContent=t;
 }
 
-const roleEl=document.getElementById('reportRole');
-function setRole(next){
-  role=next;
-  try{localStorage.setItem(ROLE_KEY,next);}catch(e){}
-  roleEl.checked=next==='responsable';
-  exportBtn.hidden=next!=='responsable';
-  if(next==='responsable'&&ready)exportBtn.disabled=false;
+function applyRole(){
+  role=teamRole==='owner'?'responsable':'contador';
+  exportBtn.hidden=role!=='responsable';
+  if(role==='responsable'&&ready)exportBtn.disabled=false;
 }
-roleEl.checked=role==='responsable';
-exportBtn.hidden=role!=='responsable';
-roleEl.addEventListener('change',()=>setRole(roleEl.checked?'responsable':'contador'));
+applyRole();
 
 // ---------- Puerta de entrada ----------
 const ov=document.createElement('div');
@@ -3407,42 +3408,72 @@ ov.id='cloudGate';
 ov.style.cssText='position:fixed;inset:0;z-index:100;background:var(--bg);display:none;align-items:center;justify-content:center;padding:24px';
 ov.innerHTML=
   '<div style="width:min(360px,100%)">'+
-    '<h2 class="sec-title" id="clTitle" style="font-size:1.25rem">Inicia sesión</h2>'+
-    '<p class="sheet-lead">Tus conteos se guardan en la nube para que no se pierdan si el teléfono se apaga.</p>'+
-    '<div class="field-line"><label for="cl-mail">Correo</label>'+
-      '<input id="cl-mail" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false"></div>'+
-    '<div class="field-line"><label for="cl-pass">Contraseña</label>'+
-      '<input id="cl-pass" type="password" autocomplete="current-password"></div>'+
-    '<p class="sheet-error" id="cl-err" role="alert"></p>'+
-    '<div style="display:grid;gap:10px;margin-top:14px">'+
-      '<button type="button" class="btn btn-primary" id="cl-go">Entrar</button>'+
-      '<button type="button" class="btn btn-quiet" id="cl-skip">Continuar sin nube</button>'+
+    '<div id="clPanel">'+
+      '<h2 class="sec-title" id="clTitle" style="font-size:1.25rem">Inicia sesión</h2>'+
+      '<p class="sheet-lead">Cada contador entra con su propio correo y contraseña.</p>'+
+      '<div class="field-line"><label for="cl-mail">Correo</label>'+
+        '<input id="cl-mail" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false"></div>'+
+      '<div class="field-line"><label for="cl-pass">Contraseña</label>'+
+        '<input id="cl-pass" type="password" autocomplete="current-password"></div>'+
+      '<p class="sheet-error" id="cl-err" role="alert"></p>'+
+      '<div style="display:grid;gap:10px;margin-top:14px">'+
+        '<button type="button" class="btn btn-primary" id="cl-go">Entrar</button>'+
+        '<button type="button" class="btn btn-quiet" id="cl-new">Crear cuenta</button>'+
+        '<button type="button" class="btn btn-quiet" id="cl-skip">Continuar sin nube</button>'+
+      '</div>'+
+    '</div>'+
+    '<div id="tmPanel" hidden>'+
+      '<h2 class="sec-title" style="font-size:1.25rem">Tu equipo</h2>'+
+      '<p class="sheet-lead" id="tm-lead">Crea un equipo y comparte el código con el otro contador, o escribe el código que te dieron.</p>'+
+      '<button type="button" class="btn btn-primary" id="tm-create">Crear equipo</button>'+
+      '<div class="field-line" style="margin-top:14px"><label for="tm-code">Código del equipo</label>'+
+        '<input id="tm-code" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABC234"></div>'+
+      '<button type="button" class="btn btn-quiet" id="tm-join">Unirme con código</button>'+
+      '<p class="sheet-error" id="tm-err" role="alert"></p>'+
+      '<div id="tm-mine" hidden>'+
+        '<p class="sheet-lead">Comparte este código con el otro contador: <strong id="tm-codigo"></strong></p>'+
+        '<button type="button" class="btn btn-primary" id="tm-done">Continuar</button>'+
+      '</div>'+
     '</div>'+
   '</div>';
 document.body.appendChild(ov);
 const gate=id=>document.getElementById(id);
 
 let gatePrevFocus=null;
-function showLogin(){
+function showGate(which){
   gatePrevFocus=document.activeElement;
   ov.style.display='flex';
   document.body.classList.add('is-locked');
-  const m=gate('cl-mail');
-  if(m)m.focus();
+  gate('clPanel').hidden=which!=='login';
+  gate('tmPanel').hidden=which!=='team';
+  if(which==='team'){
+    gate('tm-err').textContent='';
+    gate('tm-lead').textContent='Crea un equipo y comparte el código con el otro contador, o escribe el código que te dieron.';
+    gate('tm-mine').hidden=true;
+    gate('tm-create').hidden=false;
+    gate('tm-join').hidden=false;
+    gate('tm-code').hidden=false;
+    gate('tm-code').value='';
+  }
+  const f=which==='login'?gate('cl-mail'):gate('tm-code');
+  if(f)f.focus();
 }
+function showLogin(){showGate('login');}
+function showTeam(){showGate('team');}
 function hideLogin(){
   ov.style.display='none';
   document.body.classList.remove('is-locked');
-  if(gatePrevFocus&&gatePrevFocus.focus&&gatePrevFocus!==document.body)gatePrevFocus.focus();
+  if(gatePrevFocus&&gatePrevFocus.focus&&gatePrevFocus!==document.body&&gatePrevFocus.offsetParent!==null)gatePrevFocus.focus();
   else searchInput.focus();
 }
-// El foco no puede quedarse detrás de la puerta: con teclado, Tab cicla
-// entre los dos botones y los dos campos, y Escape equivale a "sin nube".
 ov.addEventListener('keydown',e=>{
   if(ov.style.display==='none')return;
-  if(e.key==='Escape'){e.preventDefault();skipCloud();return;}
+  if(e.key==='Escape'){
+    if(gate('clPanel').hidden)return;
+    e.preventDefault();skipCloud();return;
+  }
   if(e.key!=='Tab')return;
-  const f=ov.querySelectorAll('button,input');
+  const f=[...ov.querySelectorAll('button,input')].filter(x=>x.offsetParent!==null);
   if(!f.length)return;
   const first=f[0],last=f[f.length-1];
   if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
@@ -3458,24 +3489,23 @@ document.querySelector('.foot-row').appendChild(outBtn);
 
 // ---------- Ciclo semanal y sesión del día ----------
 async function findSession(d){
+  if(!team)return null;
   if(sessCache[d])return sessCache[d];
-  const {data,error}=await sb.from('sessions').select('id').eq('fecha',d).order('creada_en').limit(1);
+  const {data,error}=await sb.from('sessions').select('id').eq('team_id',team.id).eq('fecha',d).order('creada_en').limit(1);
   if(error)throw error;
   if(data&&data.length)sessCache[d]=data[0].id;
   return sessCache[d]||null;
 }
 async function ensureSession(d){
+  if(!team)throw new Error('Sin equipo');
   const f=await findSession(d);
   if(f)return f;
   const cy=await sb.from('cycles')
-    .upsert({owner_id:uid,semana_inicio:mondayOf(d)},{onConflict:'owner_id,semana_inicio'})
+    .upsert({team_id:team.id,owner_id:uid,semana_inicio:mondayOf(d)},{onConflict:'team_id,semana_inicio'})
     .select('id').single();
   if(cy.error)throw cy.error;
-  // Upsert y no insert: con dos teléfonos, la restricción única
-  // (owner_id, fecha) hace que el segundo reciba la sesión del primero en
-  // vez de abrir una segunda para el mismo día y partir los conteos.
   const s=await sb.from('sessions')
-    .upsert({owner_id:uid,cycle_id:cy.data.id,fecha:d},{onConflict:'owner_id,fecha'})
+    .upsert({team_id:team.id,owner_id:uid,cycle_id:cy.data.id,fecha:d},{onConflict:'team_id,fecha'})
     .select('id').single();
   if(s.error)throw s.error;
   sessCache[d]=s.data.id;
@@ -3484,12 +3514,13 @@ async function ensureSession(d){
 
 // ---------- Catálogo ----------
 async function syncCatalog(){
-  if(!sb||!uid||!ready||!PRODUCTS.length)return;
+  if(!sb||!uid||!team||!ready||!PRODUCTS.length)return;
   const sid=await ensureSession(todayISO());
   // Siempre el mismo filtro que la carga del archivo: lo que la app no cuenta
   // (sin referencia, total general, empieza con E) tampoco sube a la base.
   const subibles=cleanProducts(PRODUCTS);
   const prods=subibles.map(p=>({
+    team_id:team.id,
     owner_id:uid,
     codigo_erp:String(p.Referencia),
     descripcion:String(p.Descripcion),
@@ -3497,7 +3528,7 @@ async function syncCatalog(){
     activo:true
   }));
   for(const ch of chunk(prods,300)){
-    const {error}=await sb.from('products').upsert(ch,{onConflict:'owner_id,codigo_erp'});
+    const {error}=await sb.from('products').upsert(ch,{onConflict:'team_id,codigo_erp'});
     if(error)throw error;
   }
   // La foto de existencias se rehace entera: el Excel de hoy manda sobre
@@ -3505,7 +3536,7 @@ async function syncCatalog(){
   let r=await sb.from('erp_snapshots').delete().eq('session_id',sid);
   if(r.error)throw r.error;
   const snaps=subibles
-    .map(p=>({session_id:sid,owner_id:uid,codigo_erp:String(p.Referencia),existencia:systemQty(p.Existencia)}));
+    .map(p=>({team_id:team.id,session_id:sid,owner_id:uid,codigo_erp:String(p.Referencia),existencia:systemQty(p.Existencia)}));
   for(const ch of chunk(snaps,300)){
     r=await sb.from('erp_snapshots').upsert(ch,{onConflict:'session_id,codigo_erp'});
     if(r.error)throw r.error;
@@ -3550,7 +3581,9 @@ async function restoreCatalog(){
 // ---------- Conteos ----------
 const toRow=(c,sid,knownId)=>({
   id:c.id,
+  team_id:team.id,
   owner_id:uid,
+  creado_por:uid,
   session_id:sid,
   codigo_erp:String(c.Referencia),
   descripcion:c.Descripcion||null,
@@ -3572,7 +3605,7 @@ function assignIds(){
 }
 
 async function syncCart(){
-  if(!sb||!uid||!ready)return;
+  if(!sb||!uid||!team||!ready)return;
   if(busy){dirty=true;return;}
   if(!navigator.onLine){setState('offline');return;}
   busy=true;dirty=false;failed=false;setState('sync');
@@ -3681,13 +3714,14 @@ async function fetchAll(table,select,filters){
 }
 async function fetchSessionLines(sid){
   const rows=await fetchAll('count_lines',
-    'id,codigo_erp,descripcion,um,cantidad,posicion,bodega,vencimiento,creado_en',
+    'id,codigo_erp,descripcion,um,cantidad,posicion,bodega,vencimiento,creado_por,creado_en',
     [['session_id',sid],['anulado',false]]);
   return rows.map(r=>{
     const dt=new Date(r.creado_en),valid=!isNaN(dt.getTime());
     return {
       Referencia:r.codigo_erp,Descripcion:r.descripcion||'',UM:r.um||'',
       Bodega:r.bodega||'',Posicion:r.posicion||'',Cantidad:Number(r.cantidad)||0,
+      ContadoPor:teamUsers[r.creado_por]||'',
       Vencimiento:r.vencimiento||'',
       FechaISO:valid?dt.toISOString().slice(0,10):'',
       Fecha:valid?dt.toLocaleDateString('es-CO'):'',
@@ -3783,6 +3817,31 @@ function skipCloud(){
   setState('local');
 }
 
+async function resolveTeam(){
+  const {data:ms,error}=await sb.from('team_members').select('team_id,rol,email').eq('user_id',uid);
+  if(error)throw error;
+  if(!ms||!ms.length){
+    team=null;teamRole=null;teamUsers=Object.create(null);
+    applyRole();saveTeam();
+    return;
+  }
+  const m=ms[0];
+  const {data:ts,error:te}=await sb.from('teams').select('id,codigo,nombre').eq('id',m.team_id).maybeSingle();
+  if(te)throw te;
+  team=ts||{id:m.team_id};
+  teamRole=m.rol==='owner'?'owner':'contador';
+  const {data:others}=await sb.from('team_members').select('user_id,email,rol').eq('team_id',team.id);
+  teamUsers=Object.create(null);
+  (others||[]).forEach(x=>{teamUsers[x.user_id]=x.email||'';});
+  applyRole();saveTeam();
+  Object.keys(sessCache).forEach(k=>delete sessCache[k]);
+}
+
+async function afterAuth(){
+  try{await resolveTeam();}catch(e){console.warn('[nube] equipo:',e&&e.message);}
+  if(team)start();else showTeam();
+}
+
 async function login(){
   const err=gate('cl-err');
   err.textContent='';
@@ -3800,19 +3859,110 @@ async function login(){
     return;
   }
   uid=data.user.id;
+  userEmail=data.user.email||email;
   gate('cl-pass').value='';
-  start();
+  await afterAuth();
+}
+
+async function register(){
+  const err=gate('cl-err');
+  err.textContent='';
+  const email=gate('cl-mail').value.trim();
+  const pass=gate('cl-pass').value;
+  if(!email||!pass){err.textContent='Escribe el correo y la contraseña.';return;}
+  if(pass.length<6){err.textContent='La contraseña debe tener al menos 6 caracteres.';return;}
+  const btn=gate('cl-new');
+  btn.disabled=true;
+  const {data,error}=await sb.auth.signUp({email,password:pass});
+  btn.disabled=false;
+  if(error){
+    err.textContent=/network|fetch|failed to fetch/i.test(error.message)
+      ?'Sin conexión. Inténtalo otra vez con señal.'
+      :(error.message||'No se pudo crear la cuenta.');
+    return;
+  }
+  if(data.session){
+    uid=data.session.user.id;
+    userEmail=email;
+    gate('cl-pass').value='';
+    await afterAuth();
+  }else{
+    err.textContent='Cuenta creada. Confirma el correo y entra de nuevo.';
+  }
+}
+
+async function createTeam(){
+  const err=gate('tm-err');
+  err.textContent='';
+  const btn=gate('tm-create');
+  btn.disabled=true;
+  try{
+    let res=null;
+    for(let i=0;i<5&&!res;i++){
+      const {data,error}=await sb.rpc('create_team',{p_codigo:randomCode(),p_email:userEmail});
+      if(!error)res=data;
+      else if(!/unique|duplicate/i.test(error.message))throw error;
+    }
+    if(!res)throw new Error('No se pudo generar un código');
+    team=res;
+    teamRole='owner';
+    gate('tm-codigo').textContent=res.codigo;
+    gate('tm-mine').hidden=false;
+    gate('tm-create').hidden=true;
+    gate('tm-join').hidden=true;
+    gate('tm-code').hidden=true;
+    applyRole();saveTeam();
+  }catch(e){
+    err.textContent=e.message||'No se pudo crear el equipo.';
+  }finally{
+    btn.disabled=false;
+  }
+}
+
+async function joinTeam(){
+  const err=gate('tm-err');
+  err.textContent='';
+  const code=gate('tm-code').value.trim().toUpperCase();
+  if(code.length!==6){err.textContent='El código tiene 6 caracteres.';return;}
+  const btn=gate('tm-join');
+  btn.disabled=true;
+  try{
+    const {data,error}=await sb.rpc('join_team',{p_codigo:code,p_email:userEmail});
+    if(error)throw error;
+    team=data;
+    teamRole='contador';
+    gate('tm-mine').hidden=false;
+    gate('tm-codigo').textContent=code;
+    gate('tm-create').hidden=true;
+    gate('tm-join').hidden=true;
+    gate('tm-code').hidden=true;
+    gate('tm-lead').textContent='Listo: ya estás en el equipo.';
+    applyRole();saveTeam();
+  }catch(e){
+    err.textContent=/no hay un equipo/i.test(e.message)?'No hay un equipo con ese código.':(e.message||'No se pudo unir al equipo.');
+  }finally{
+    btn.disabled=false;
+  }
 }
 
 gate('cl-go').onclick=login;
+gate('cl-new').onclick=register;
 gate('cl-pass').addEventListener('keydown',e=>{
   if(e.key==='Enter'){e.preventDefault();login();}
 });
+gate('tm-create').onclick=createTeam;
+gate('tm-join').onclick=joinTeam;
+gate('tm-code').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){e.preventDefault();joinTeam();}
+});
+gate('tm-done').onclick=()=>{hideLogin();start();};
 gate('cl-skip').onclick=skipCloud;
 
 outBtn.onclick=async()=>{
   try{await sb.auth.signOut();}catch(e){}
-  uid=null;ready=false;
+  uid=null;userEmail=null;team=null;teamRole=null;teamUsers=Object.create(null);
+  ready=false;
+  applyRole();saveTeam();
   outBtn.hidden=true;
   Object.keys(sessCache).forEach(k=>delete sessCache[k]);
   setState('local');
@@ -3850,7 +4000,8 @@ async function init(){
     const {data}=await sb.auth.getSession();
     if(data&&data.session){
       uid=data.session.user.id;
-      start();
+      userEmail=data.session.user.email||null;
+      await afterAuth();
     }else{
       showLogin();
     }
