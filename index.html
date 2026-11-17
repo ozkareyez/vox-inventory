@@ -643,11 +643,17 @@ th.num{padding-right:10px;}
 .btn-primary{background:var(--ink);color:var(--bg);}
 .btn-primary:hover:not(:disabled){opacity:.88;}
 .btn-primary:disabled{background:transparent;color:var(--ink2);border-color:var(--rule2);cursor:default;}
+.btn[hidden]{display:none;}
 
 .foot-row{
   display:flex;align-items:center;justify-content:space-between;gap:16px;
   margin-top:14px;flex-wrap:wrap;
 }
+.role-toggle{
+  display:inline-flex;align-items:center;gap:8px;cursor:pointer;
+  font:500 .8125rem var(--f-ui);color:var(--ink2);
+}
+.role-toggle input{width:16px;height:16px;accent-color:var(--ink);}
 
 /* ============================================================
    HOJA DE CONTEO
@@ -1032,6 +1038,7 @@ th.num{padding-right:10px;}
   <footer class="foot">
     <button type="button" class="btn btn-primary" id="exportBtn" disabled>Exportar a Excel</button>
     <div class="foot-row">
+      <label class="role-toggle" for="reportRole"><input type="checkbox" id="reportRole"> Genera el informe</label>
       <button type="button" class="linkbtn" id="resetDayBtn">Empezar de nuevo</button>
       <button type="button" class="linkbtn" id="installBtn" hidden>Instalar la app</button>
     </div>
@@ -2742,9 +2749,8 @@ function readFile(file){
 // ============================================================
 //  EXPORTAR
 // ============================================================
-exportBtn.addEventListener('click',()=>{
-  if(cart.length===0&&PRODUCTS.length===0)return;
-  const detalle=cart.map(c=>({
+function detailFromCart(list){
+  return list.map(c=>({
     Fecha:c.FechaISO||c.Fecha||'', Hora:c.Hora, Referencia:c.Referencia, Descripcion:c.Descripcion,
     Posicion:c.Posicion||'', Bodega:c.Bodega, UM:c.UM, Cantidad:c.Cantidad,
     // El vencimiento va junto a cada conteo y no en el resumen: una misma
@@ -2752,10 +2758,12 @@ exportBtn.addEventListener('click',()=>{
     // una sola columna de totales tendría que elegir una o juntarlas con comas.
     Vencimiento:normVenc(c.Vencimiento)
   }));
+}
 
+function totalsFrom(countList,catalog){
   // Lo contado por referencia, para cruzar el conteo con el archivo cargado.
   const counted={};
-  cart.forEach(c=>{
+  countList.forEach(c=>{
     const ref=String(c.Referencia);
     if(!counted[ref])counted[ref]={total:0,conteos:0};
     counted[ref].total+=Number(c.Cantidad)||0;
@@ -2783,19 +2791,34 @@ exportBtn.addEventListener('click',()=>{
       Estado:c.conteos>0?'Contado':(sys===null?'Sin existencia':'No contado')
     });
   };
-  PRODUCTS.forEach(addRow);
+  catalog.forEach(addRow);
   // Si un conteo quedó de un archivo anterior, no se pierde: se agrega igual.
-  cart.forEach(c=>{
+  countList.forEach(c=>{
     if(!seen[String(c.Referencia)])addRow({Referencia:c.Referencia,Descripcion:c.Descripcion,Bodega:c.Bodega,UM:c.UM,Existencia:c.Existencia});
   });
+  return totales;
+}
 
+function finishExport(detalle,totales,stamp){
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(totales),"Inventario completo");
   if(detalle.length)XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(detalle),"Conteos individuales");
-  const stamp=new Date().toISOString().slice(0,10).replace(/-/g,'');
   XLSX.writeFile(wb,"conteo_inventario_"+stamp+".xlsx");
   const sinContar=totales.filter(t=>t.Estado==='No contado').length;
-  showToast('Archivo exportado: '+totales.length+(totales.length===1?' referencia':' referencias')+', '+cart.length+(cart.length===1?' conteo':' conteos')+(sinContar?', '+sinContar+' sin contar.':'.'));
+  showToast('Archivo exportado: '+totales.length+(totales.length===1?' referencia':' referencias')+', '+detalle.length+(detalle.length===1?' conteo':' conteos')+(sinContar?', '+sinContar+' sin contar.':'.'));
+}
+
+function exportLocal(){
+  if(!cart.length&&!PRODUCTS.length)return;
+  const detalle=detailFromCart(cart);
+  const totales=totalsFrom(cart,PRODUCTS);
+  const stamp=new Date().toISOString().slice(0,10).replace(/-/g,'');
+  finishExport(detalle,totales,stamp);
+}
+
+exportBtn.addEventListener('click',()=>{
+  if(window.voxExportReport){window.voxExportReport();return;}
+  exportLocal();
 });
 
 // ============================================================
@@ -3326,8 +3349,10 @@ const SB_LIB='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd
 const SB_SRI='sha384-0w2KAL2YHP6wKOkUDzkCDGgVvfmHnj02DHeQ6XcHOgTfFsGyonKOpShMH1x6nk9o';
 const KNOWN_KEY='vox_known_ids';
 const RESET_KEY='vox_day_reset';
+const ROLE_KEY='vox_report_role';
 
 let sb=null,uid=null,ready=false,busy=false,dirty=false,failed=false,restoring=false,timer=null;
+let role=localStorage.getItem(ROLE_KEY)==='responsable'?'responsable':'contador';
 let known=new Set((()=>{try{const a=JSON.parse(localStorage.getItem(KNOWN_KEY));return Array.isArray(a)?a:[];}catch(e){return [];}})());
 const sessCache={};
 
@@ -3363,6 +3388,18 @@ function setState(kind,msg){
   if(kind==='ok'&&cart.length)t+=' · '+cart.length+(cart.length===1?' conteo':' conteos');
   stateEl.textContent=t;
 }
+
+const roleEl=document.getElementById('reportRole');
+function setRole(next){
+  role=next;
+  try{localStorage.setItem(ROLE_KEY,next);}catch(e){}
+  roleEl.checked=next==='responsable';
+  exportBtn.hidden=next!=='responsable';
+  if(next==='responsable'&&ready)exportBtn.disabled=false;
+}
+roleEl.checked=role==='responsable';
+exportBtn.hidden=role!=='responsable';
+roleEl.addEventListener('change',()=>setRole(roleEl.checked?'responsable':'contador'));
 
 // ---------- Puerta de entrada ----------
 const ov=document.createElement('div');
@@ -3511,7 +3548,7 @@ async function restoreCatalog(){
 }
 
 // ---------- Conteos ----------
-const toRow=(c,sid)=>({
+const toRow=(c,sid,knownId)=>({
   id:c.id,
   owner_id:uid,
   session_id:sid,
@@ -3520,8 +3557,10 @@ const toRow=(c,sid)=>({
   um:c.UM||null,
   cantidad:Number(c.Cantidad),
   posicion:c.Posicion||null,
+  bodega:c.Bodega||null,
+  vencimiento:normVenc(c.Vencimiento)||null,
   creado_en:c.ts,
-  anulado:false
+  ...(knownId?{}:{anulado:false})
 });
 
 // El id se lo pone la nube en el resto de apps; aquí se genera al vuelo y se
@@ -3543,7 +3582,14 @@ async function syncCart(){
     cart.forEach(c=>{const d=c.FechaISO||todayISO();(byDate[d]=byDate[d]||[]).push(c);});
     for(const d of Object.keys(byDate)){
       const sid=await ensureSession(d);
-      for(const ch of chunk(byDate[d].map(c=>toRow(c,sid)),200)){
+      const rows=byDate[d].map(c=>toRow(c,sid,known.has(c.id)));
+      const fresh=rows.filter(r=>'anulado' in r);
+      const existing=rows.filter(r=>!('anulado' in r));
+      for(const ch of chunk(fresh,200)){
+        const {error}=await sb.from('count_lines').upsert(ch,{onConflict:'id'});
+        if(error)throw error;
+      }
+      for(const ch of chunk(existing,200)){
         const {error}=await sb.from('count_lines').upsert(ch,{onConflict:'id'});
         if(error)throw error;
       }
@@ -3570,18 +3616,19 @@ async function syncCart(){
 }
 function schedule(){clearTimeout(timer);timer=setTimeout(syncCart,800);}
 
-// Trae los conteos de hoy hechos en otro dispositivo: los que este teléfono
-// no conoce (no están en la bitácora ni en la lista de ids que ya se suba).
+// Trae los conteos de hoy hechos en otro dispositivo y quita los que ese
+// dispositivo anuló: la bitácora de la nube manda sobre la copia local.
 async function pullToday(){
   if(resetDay())return;
   const sid=await findSession(todayISO());
   if(!sid)return;
-  const {data,error}=await sb.from('count_lines')
-    .select('id,codigo_erp,descripcion,um,cantidad,posicion,creado_en')
-    .eq('session_id',sid).eq('anulado',false).order('creado_en');
-  if(error)throw error;
+  const data=await fetchAll('count_lines',
+    'id,codigo_erp,descripcion,um,cantidad,posicion,bodega,vencimiento,creado_en',
+    [['session_id',sid],['anulado',false]]);
+  data.sort((a,b)=>String(a.creado_en).localeCompare(String(b.creado_en)));
+  const active=new Set(data.map(r=>r.id));
   const have=new Set(cart.map(c=>c.id));
-  let added=0;
+  let added=0,removed=0;
   for(const r of data){
     if(have.has(r.id)||known.has(r.id))continue;
     const p=PRODUCTS.find(x=>String(x.Referencia)===r.codigo_erp)||
@@ -3590,6 +3637,8 @@ async function pullToday(){
     cart.push(Object.assign({},p,{
       Cantidad:Number(r.cantidad),
       Posicion:r.posicion||'',
+      Bodega:r.bodega||p.Bodega||'',
+      Vencimiento:r.vencimiento||'',
       FechaISO:todayISO(),
       Fecha:dt.toLocaleDateString('es-CO'),
       Hora:dt.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
@@ -3599,20 +3648,103 @@ async function pullToday(){
     known.add(r.id);
     added++;
   }
-  if(added){
+  for(let i=cart.length-1;i>=0;i--){
+    const c=cart[i];
+    if(c.id&&known.has(c.id)&&!active.has(c.id)){
+      cart.splice(i,1);
+      known.delete(c.id);
+      removed++;
+    }
+  }
+  if(added||removed){
     saveKnown();
     origSave();
     renderLog();
     renderDiff();
-    showToast(added===1?'Se recuperó 1 conteo de la nube.':'Se recuperaron '+added+' conteos de la nube.');
+    showToast(added?(added===1?'Se recuperó 1 conteo de la nube.':'Se recuperaron '+added+' conteos de la nube.'):
+      (removed===1?'Se quitó 1 conteo anulado en la nube.':'Se quitaron '+removed+' conteos anulados en la nube.'));
   }
 }
+
+// ---------- Informe único ----------
+async function fetchAll(table,select,filters){
+  const out=[],size=1000;
+  for(let from=0;;from+=size){
+    let q=sb.from(table).select(select);
+    filters.forEach(f=>{q=q.eq(f[0],f[1]);});
+    const {data,error}=await q.range(from,from+size-1);
+    if(error)throw error;
+    out.push(...(data||[]));
+    if(!data||data.length<size)break;
+  }
+  return out;
+}
+async function fetchSessionLines(sid){
+  const rows=await fetchAll('count_lines',
+    'id,codigo_erp,descripcion,um,cantidad,posicion,bodega,vencimiento,creado_en',
+    [['session_id',sid],['anulado',false]]);
+  return rows.map(r=>{
+    const dt=new Date(r.creado_en),valid=!isNaN(dt.getTime());
+    return {
+      Referencia:r.codigo_erp,Descripcion:r.descripcion||'',UM:r.um||'',
+      Bodega:r.bodega||'',Posicion:r.posicion||'',Cantidad:Number(r.cantidad)||0,
+      Vencimiento:r.vencimiento||'',
+      FechaISO:valid?dt.toISOString().slice(0,10):'',
+      Fecha:valid?dt.toLocaleDateString('es-CO'):'',
+      Hora:valid?dt.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}):''
+    };
+  });
+}
+async function fetchSharedCatalog(sid){
+  const snaps=await fetchAll('erp_snapshots','codigo_erp,existencia',[['session_id',sid]]);
+  if(!snaps.length)return PRODUCTS.slice();
+  const prods=await fetchAll('products','codigo_erp,descripcion,um',[]);
+  const byCode=Object.create(null);
+  prods.forEach(p=>{byCode[p.codigo_erp]=p;});
+  return snaps.map(s=>{
+    const p=byCode[s.codigo_erp];
+    return {
+      Referencia:s.codigo_erp,Descripcion:(p&&p.descripcion)||'',Bodega:'',Peso:'',
+      UM:(p&&p.um)||'',Existencia:s.existencia==null?'':Number(s.existencia),
+      Transito:'',Disponible:'',Comprometida:''
+    };
+  });
+}
+async function sessionStamp(sid){
+  const {data}=await sb.from('sessions').select('fecha').eq('id',sid).maybeSingle();
+  return data&&data.fecha?String(data.fecha).replace(/-/g,''):todayISO().replace(/-/g,'');
+}
+window.voxExportReport=async function(){
+  if(role!=='responsable')return;
+  if(!sb||!uid){exportLocal();return;}
+  if(!ready){showToast('El informe único se genera con los conteos de la nube. Espera a sincronizar.');return;}
+  if(busy){showToast('Espera a que terminen de subir los conteos.');return;}
+  setState('sync');
+  try{
+    const sid=await ensureSession(todayISO());
+    const rows=await fetchSessionLines(sid);
+    if(!rows.length){showToast('Todavía no hay conteos en la nube para generar el informe.');setState('ok');return;}
+    const catalog=await fetchSharedCatalog(sid);
+    finishExport(detailFromCart(rows),totalsFrom(rows,catalog),await sessionStamp(sid));
+    setState('ok');
+  }catch(e){
+    console.warn('[nube] no se pudo generar el informe:',e&&e.message);
+    showToast('No se pudo generar el informe desde la nube. Revisa la conexión.');
+    setState('error');
+  }
+};
 
 // ---------- Enganches con la app ----------
 // Los originales se guardan ANTES de sustituir: si no, el envoltorio se
 // llamaría a sí mismo en bucle.
 const origSave=window.saveCart;
 const origApply=window.applyCatalog;
+const origUpdateCount=window.updateCount;
+const origRenderLog=window.renderLog;
+const keepExportReady=()=>{if(role==='responsable'&&ready)exportBtn.disabled=false;};
+
+window.updateCount=function(){origUpdateCount.apply(this,arguments);keepExportReady();};
+window.renderLog=function(){origRenderLog.apply(this,arguments);keepExportReady();};
 
 window.saveCart=function(){
   assignIds();
@@ -3636,11 +3768,13 @@ async function start(){
     await restoreCatalog();
     await pullToday();
     ready=true;
+    keepExportReady();
     await syncCatalog();
     await syncCart();
   }catch(e){
     // La nube no está: la app sigue contando en local, no se rompe nada.
     ready=true;
+    keepExportReady();
     setState('error');
   }
 }

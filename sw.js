@@ -1,4 +1,4 @@
-const CACHE = 'vox-inventory-v7';
+const CACHE = 'vox-inventory-v8';
 const PRECACHE = [
   './',
   'index.html',
