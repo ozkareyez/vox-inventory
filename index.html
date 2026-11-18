@@ -3416,6 +3416,7 @@ ov.innerHTML=
       '<div class="field-line"><label for="cl-pass">Contraseña</label>'+
         '<input id="cl-pass" type="password" autocomplete="current-password"></div>'+
       '<p class="sheet-error" id="cl-err" role="alert"></p>'+
+      '<button type="button" class="linkbtn" id="cl-resend" hidden>Reenviar confirmación</button>'+
       '<div style="display:grid;gap:10px;margin-top:14px">'+
         '<button type="button" class="btn btn-primary" id="cl-go">Entrar</button>'+
         '<button type="button" class="btn btn-quiet" id="cl-new">Crear cuenta</button>'+
@@ -3439,7 +3440,16 @@ ov.innerHTML=
 document.body.appendChild(ov);
 const gate=id=>document.getElementById(id);
 
-let gatePrevFocus=null;
+let gatePrevFocus=null,gateMode='login';
+function authErr(error){
+  const m=(error&&error.message)||'';
+  if(/already registered|already exists|user already/i.test(m))return 'Ese correo ya tiene cuenta. Pulsa Entrar con su contraseña.';
+  if(/not confirmed|confirm your email|email not confirm/i.test(m))return 'Confirma el correo (revisa también la carpeta de spam) y vuelve a entrar.';
+  if(/signups|sign ups|signup|not allowed|disabled/i.test(m))return 'El registro está desactivado en Supabase. Activa "Allow new users to sign up" en Authentication → Providers → Email.';
+  if(/password|weak/i.test(m))return 'La contraseña es demasiado débil. Usa al menos 6 caracteres.';
+  if(/network|fetch|failed to fetch/i.test(m))return 'Sin conexión. Inténtalo otra vez con señal.';
+  return m||'No se pudo completar la acción.';
+}
 function showGate(which){
   gatePrevFocus=document.activeElement;
   ov.style.display='flex';
@@ -3843,6 +3853,8 @@ async function afterAuth(){
 }
 
 async function login(){
+  gateMode='login';
+  gate('cl-resend').hidden=true;
   const err=gate('cl-err');
   err.textContent='';
   const email=gate('cl-mail').value.trim();
@@ -3850,21 +3862,31 @@ async function login(){
   if(!email||!pass){err.textContent='Escribe el correo y la contraseña.';return;}
   const btn=gate('cl-go');
   btn.disabled=true;
-  const {data,error}=await sb.auth.signInWithPassword({email,password:pass});
-  btn.disabled=false;
-  if(error){
-    err.textContent=/network|fetch|failed to fetch/i.test(error.message)
-      ?'Sin conexión. Inténtalo otra vez con señal.'
-      :'Correo o contraseña incorrectos.';
-    return;
+  try{
+    const {data,error}=await sb.auth.signInWithPassword({email,password:pass});
+    if(error){
+      console.warn('[nube] login:',error.message);
+      err.textContent=/invalid login credentials/i.test(error.message)
+        ?'Correo o contraseña incorrectos. Si aún no tienes cuenta, pulsa Crear cuenta.'
+        :authErr(error);
+      if(/not confirmed|confirm/i.test(error.message))gate('cl-resend').hidden=false;
+      return;
+    }
+    uid=data.user.id;
+    userEmail=data.user.email||email;
+    gate('cl-pass').value='';
+    await afterAuth();
+  }catch(e){
+    console.warn('[nube] login:',e&&e.message);
+    err.textContent=authErr(e);
+  }finally{
+    btn.disabled=false;
   }
-  uid=data.user.id;
-  userEmail=data.user.email||email;
-  gate('cl-pass').value='';
-  await afterAuth();
 }
 
 async function register(){
+  gateMode='register';
+  gate('cl-resend').hidden=true;
   const err=gate('cl-err');
   err.textContent='';
   const email=gate('cl-mail').value.trim();
@@ -3873,21 +3895,39 @@ async function register(){
   if(pass.length<6){err.textContent='La contraseña debe tener al menos 6 caracteres.';return;}
   const btn=gate('cl-new');
   btn.disabled=true;
-  const {data,error}=await sb.auth.signUp({email,password:pass});
-  btn.disabled=false;
-  if(error){
-    err.textContent=/network|fetch|failed to fetch/i.test(error.message)
-      ?'Sin conexión. Inténtalo otra vez con señal.'
-      :(error.message||'No se pudo crear la cuenta.');
-    return;
+  try{
+    const {data,error}=await sb.auth.signUp({email,password:pass});
+    if(error){
+      console.warn('[nube] signup:',error.message);
+      err.textContent=authErr(error);
+      return;
+    }
+    if(data.session){
+      uid=data.session.user.id;
+      userEmail=email;
+      gate('cl-pass').value='';
+      await afterAuth();
+    }else{
+      err.textContent='Cuenta creada: revisa tu correo y confirma la cuenta. Después pulsa Entrar con tus datos.';
+      gate('cl-resend').hidden=false;
+    }
+  }catch(e){
+    console.warn('[nube] signup:',e&&e.message);
+    err.textContent=authErr(e);
+  }finally{
+    btn.disabled=false;
   }
-  if(data.session){
-    uid=data.session.user.id;
-    userEmail=email;
-    gate('cl-pass').value='';
-    await afterAuth();
-  }else{
-    err.textContent='Cuenta creada. Confirma el correo y entra de nuevo.';
+}
+
+async function resendConfirm(){
+  const err=gate('cl-err');
+  const email=gate('cl-mail').value.trim();
+  if(!email){err.textContent='Escribe el correo para reenviar la confirmación.';return;}
+  try{
+    const {error}=await sb.auth.resend({type:'signup',email});
+    err.textContent=error?authErr(error):'Correo de confirmación reenviado. Revisa tu bandeja y spam.';
+  }catch(e){
+    err.textContent=authErr(e);
   }
 }
 
@@ -3947,8 +3987,9 @@ async function joinTeam(){
 
 gate('cl-go').onclick=login;
 gate('cl-new').onclick=register;
+gate('cl-resend').onclick=resendConfirm;
 gate('cl-pass').addEventListener('keydown',e=>{
-  if(e.key==='Enter'){e.preventDefault();login();}
+  if(e.key==='Enter'){e.preventDefault();gateMode==='register'?register():login();}
 });
 gate('tm-create').onclick=createTeam;
 gate('tm-join').onclick=joinTeam;
