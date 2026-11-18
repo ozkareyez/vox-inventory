@@ -3425,8 +3425,8 @@ ov.innerHTML=
     '</div>'+
     '<div id="tmPanel" hidden>'+
       '<h2 class="sec-title" style="font-size:1.25rem">Tu equipo</h2>'+
-      '<p class="sheet-lead" id="tm-lead">Crea un equipo y comparte el código con el otro contador, o escribe el código que te dieron.</p>'+
-      '<button type="button" class="btn btn-primary" id="tm-create">Crear equipo</button>'+
+      '<p class="sheet-lead" id="tm-lead">Si el responsable ya creó el equipo, escribe su código y pulsa Unirme con código. Crear equipo es solo para el responsable.</p>'+
+      '<button type="button" class="btn btn-primary" id="tm-create">Crear equipo (solo responsable)</button>'+
       '<div class="field-line" style="margin-top:14px"><label for="tm-code">Código del equipo</label>'+
         '<input id="tm-code" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABC234"></div>'+
       '<button type="button" class="btn btn-quiet" id="tm-join">Unirme con código</button>'+
@@ -3458,7 +3458,7 @@ function showGate(which){
   gate('tmPanel').hidden=which!=='team';
   if(which==='team'){
     gate('tm-err').textContent='';
-    gate('tm-lead').textContent='Crea un equipo y comparte el código con el otro contador, o escribe el código que te dieron.';
+    gate('tm-lead').textContent='Si el responsable ya creó el equipo, escribe su código y pulsa Unirme con código. Crear equipo es solo para el responsable.';
     gate('tm-mine').hidden=true;
     gate('tm-create').hidden=false;
     gate('tm-join').hidden=false;
